@@ -1,5 +1,5 @@
 import type { ManifoldToplevel, Manifold, Mat4 } from 'manifold-3d';
-import { shapeMatrix, validateScene, type GeometryResult, type MeshData, type SceneState, type Shape } from './scene';
+import { shapeEntries, shapeMatrix, validateScene, type GeometryResult, type MeshData, type SceneState, type Shape, type ShapeMap } from './scene';
 import { RESOLUTIONS, shapeMesh, type GeometryQuality } from './forms';
 
 function readMesh(solid: Manifold): MeshData & { normals: Float32Array } {
@@ -27,17 +27,25 @@ export function evaluateScene(wasm: ManifoldToplevel, scene: SceneState, quality
     return own(new wasm.Manifold(new wasm.Mesh({ numProp: 3, vertProperties: mesh.positions, triVerts: mesh.indices })));
   };
   try {
-    const sourceA = create(scene.a);
-    const a = own(sourceA.transform(shapeMatrix(scene.a).elements as Mat4));
     const empty = { positions: new Float32Array(), indices: new Uint32Array(), origins: new Uint32Array() };
-    let result = a, sourceB: Manifold | null = null, bVolume = 0;
-    if (scene.operation !== 'single') {
-      sourceB = create(scene.b);
-      const b = own(sourceB.transform(shapeMatrix(scene.b).elements as Mat4));
-      bVolume = b.volume();
-      result = scene.operation === 'intersect' ? own(a.intersect(b))
-        : scene.operation === 'union' ? own(a.add(b)) : scene.operation === 'reverse' ? own(b.subtract(a))
-        : scene.operation === 'exclude' ? own(own(a.subtract(b)).add(own(b.subtract(a)))) : own(a.subtract(b));
+    const sources: ShapeMap<MeshData> = { a: empty, b: empty };
+    const solids = shapeEntries(scene).map(([id, shape]) => {
+      const source = create(shape);
+      sources[id] = readMesh(source);
+      return own(source.transform(shapeMatrix(shape).elements as Mat4));
+    });
+    const [a, ...others] = solids;
+    let result = a, bVolume = 0;
+    if (others.length) {
+      if (scene.operation === 'intersect') {
+        result = others.reduce((current, next) => own(current.intersect(next)), a);
+      } else {
+        // Treat all additional forms as one operand for cuts and overlap removal.
+        const b = others.slice(1).reduce((current, next) => own(current.add(next)), others[0]);
+        bVolume = b.volume();
+        result = scene.operation === 'union' ? own(a.add(b)) : scene.operation === 'reverse' ? own(b.subtract(a))
+          : scene.operation === 'exclude' ? own(own(a.subtract(b)).add(own(b.subtract(a)))) : own(a.subtract(b));
+      }
     }
     if (result.status() !== 'NoError') throw new Error(`The geometry could not be computed (${result.status()}).`);
     const shaded = own(result.calculateNormals(0, 30));
@@ -46,7 +54,7 @@ export function evaluateScene(wasm: ManifoldToplevel, scene: SceneState, quality
     const overlapVolume = scene.operation === 'single' ? 0 : scene.operation === 'intersect' ? volume
       : scene.operation === 'subtract' ? bodyVolume - volume : scene.operation === 'reverse' ? bVolume - volume
       : (bodyVolume + bVolume - volume) / (scene.operation === 'exclude' ? 2 : 1);
-    return { ...readMesh(shaded), sources: { a: readMesh(sourceA), b: sourceB ? readMesh(sourceB) : empty },
+    return { ...readMesh(shaded), sources,
       volume, bodyVolume, overlapVolume: Math.max(0, overlapVolume), duration: performance.now() - start };
 
   } finally { owned.reverse().forEach(m => m.delete()); }

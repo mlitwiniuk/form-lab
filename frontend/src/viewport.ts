@@ -6,7 +6,7 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { packedEdgeLines } from './edges';
 import type { RenderGeometry } from './render-geometry';
-import { cloneScene, constrainBend, constrainCurvePoint, shapeMatrix, radians, type Reveals, type SceneState, type ShapeId, type Tool, type Vec3 } from './scene';
+import { SHAPE_IDS, shapeEntries, getShape, cloneScene, constrainBend, constrainCurvePoint, shapeMatrix, radians, type Reveals, type SceneState, type ShapeId, type ShapeMap, type Tool, type Vec3 } from './scene';
 import { constructionLines, createSectionSampler, type GeometryQuality } from './forms';
 import type { CameraState } from './share-state';
 
@@ -26,20 +26,19 @@ export class Viewport {
   readonly orbit: OrbitControls;
   readonly transform: TransformControls;
   private solid: THREE.Mesh;
-  private sourceBox: THREE.Mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
-  private sourceCylinder: THREE.Mesh = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 128).rotateX(Math.PI / 2));
-  private lines: Record<'contour' | 'seam' | 'boxGuide' | 'cylinderGuide' | 'crossA' | 'crossB' | 'axis', LinePair>;
+  private proxies = SHAPE_IDS.reduce((proxies, id) => { proxies[id] = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)); return proxies; }, {} as Record<ShapeId, THREE.Mesh>);
+  private lines: Record<'contour' | 'seam' | 'primaryGuide' | 'otherGuides' | 'crossA' | 'crossOthers' | 'axis', LinePair>;
   private featureEdges: Float32Array = new Float32Array();
   private renderedScene: SceneState | null = null;
   private quality: GeometryQuality = 'final';
   private guideCacheKey = '';
-  private guideCache: { a: ReturnType<typeof constructionLines>; b: ReturnType<typeof constructionLines> } | null = null;
+  private guideCache: Partial<Record<ShapeId, ReturnType<typeof constructionLines>>> = {};
   private paintStartedAt: number | null = null;
   private renderedFrames = 0;
   private latencySamples: { quality: GeometryQuality; ms: number }[] = [];
   private state!: SceneState;
   private selection: ShapeId = 'a';
-  private sourceEdges: Record<ShapeId, Float32Array> = { a: new Float32Array(), b: new Float32Array() };
+  private sourceEdges: ShapeMap<Float32Array> = { a: new Float32Array(), b: new Float32Array() };
   private locked = false;
   private editingEnabled = false;
   private reveals: Reveals = { cutter: true, construction: false, hidden: false, seam: true };
@@ -77,18 +76,19 @@ export class Viewport {
       polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
     }));
     this.world.add(this.solid);
-    for (const proxy of [this.sourceBox, this.sourceCylinder]) {
+    for (const [id, proxy] of Object.entries(this.proxies)) {
+      proxy.userData.shapeId = id;
       proxy.material = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
       this.world.add(proxy);
     }
     this.lines = {
       contour: this.makeLinePair('#34413e', 1.8),
       seam: this.makeLinePair('#156f64', 2.5),
-      boxGuide: this.makeLinePair('#969c95', 1),
-      cylinderGuide: this.makeLinePair('#bc8062', 1.25),
+      primaryGuide: this.makeLinePair('#969c95', 1),
+      otherGuides: this.makeLinePair('#bc8062', 1.25),
       axis: this.makeLinePair('#78938c', 1, true),
       crossA: this.makeLinePair('#517e71', 1.4),
-      crossB: this.makeLinePair('#bc8062', 1.2),
+      crossOthers: this.makeLinePair('#bc8062', 1.2),
     };
     this.orbit = new OrbitControls(this.camera, this.renderer.domElement);
     this.orbit.enableDamping = false;
@@ -124,19 +124,19 @@ export class Viewport {
     this.transform.addEventListener('objectChange', () => {
       if (this.suppressEvents || !this.state) return;
       if (this.editingCurve()) {
-        const next = cloneScene(this.state), shape = next[this.selection], index = this.activePoint();
+        const next = cloneScene(this.state), shape = getShape(next, this.selection), index = this.activePoint();
         const local = this.curveHandles[index].position.clone().applyMatrix4(shapeMatrix(shape).invert());
         const position = local.toArray().map((v, axis) => v / shape.size[axis]) as Vec3;
         shape.spine![index].position = constrainCurvePoint(shape, index, position);
         this.state = next; this.callbacks.edit(next); this.updateCurveControls(); this.guideDirty = this.dirty = true;
         return;
       }
-      const object = this.selection === 'a' ? this.sourceBox : this.sourceCylinder;
+      const object = this.proxies[this.selection];
       const next = cloneScene(this.state);
-      next[this.selection].position = object.position.toArray().map(v => THREE.MathUtils.clamp(v, -8, 8)) as Vec3;
-      next[this.selection].rotation = [object.rotation.x, object.rotation.y, object.rotation.z].map(v => v * 180 / Math.PI) as Vec3;
-      next[this.selection].size = object.scale.toArray().map(v => THREE.MathUtils.clamp(v, .4, 12)) as Vec3;
-      constrainBend(next[this.selection]);
+      getShape(next, this.selection).position = object.position.toArray().map(v => THREE.MathUtils.clamp(v, -8, 8)) as Vec3;
+      getShape(next, this.selection).rotation = [object.rotation.x, object.rotation.y, object.rotation.z].map(v => v * 180 / Math.PI) as Vec3;
+      getShape(next, this.selection).size = object.scale.toArray().map(v => THREE.MathUtils.clamp(v, .4, 12)) as Vec3;
+      constrainBend(getShape(next, this.selection));
       this.state = next;
       this.callbacks.edit(next); this.guideDirty = true; this.dirty = true;
     });
@@ -148,8 +148,8 @@ export class Viewport {
       const rect = this.renderer.domElement.getBoundingClientRect();
       const pointer = new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
       const ray = new THREE.Raycaster(); ray.setFromCamera(pointer, this.camera);
-      const hit = ray.intersectObjects(this.state.operation === 'single' ? [this.sourceBox] : [this.sourceBox, this.sourceCylinder])[0];
-      if (hit) this.callbacks.select(hit.object === this.sourceBox ? 'a' : 'b');
+      const hit = ray.intersectObjects(shapeEntries(this.state).map(([id]) => this.proxies[id]))[0];
+      if (hit) this.callbacks.select(hit.object.userData.shapeId as ShapeId);
     };
     this.renderer.domElement.addEventListener('pointerdown', down);
     this.renderer.domElement.addEventListener('pointerup', up);
@@ -204,9 +204,10 @@ export class Viewport {
 
   setScene(scene: SceneState) {
     this.state = scene;
+    if (!shapeEntries(scene).some(([id]) => id === this.selection)) this.selection = 'a';
     if (this.renderedScene) this.renderedScene = { ...this.renderedScene, contours: scene.contours };
-    for (const [id, proxy] of [['a', this.sourceBox], ['b', this.sourceCylinder]] as const) {
-      const shape = scene[id];
+    for (const [id, shape] of shapeEntries(scene)) {
+      const proxy = this.proxies[id];
       proxy.position.fromArray(shape.position);
       proxy.rotation.set(...shape.rotation.map(radians) as Vec3, 'XYZ');
       proxy.scale.fromArray(shape.size);
@@ -225,9 +226,9 @@ export class Viewport {
     geometry.setIndex(new THREE.BufferAttribute(result.indices, 1));
     geometry.setAttribute('normal', new THREE.BufferAttribute(result.normals, 3));
     this.solid.geometry = geometry;
-    for (const [id, proxy] of [['a', this.sourceBox], ['b', this.sourceCylinder]] as const) {
-      const source = result.sources[id], normalized = new Float32Array(source.positions);
-      for (let i = 0; i < normalized.length; i++) normalized[i] /= scene[id].size[i % 3];
+    for (const [id, shape] of shapeEntries(scene)) {
+      const proxy = this.proxies[id], source = result.sources[id]!, normalized = new Float32Array(source.positions);
+      for (let i = 0; i < normalized.length; i++) normalized[i] /= shape.size[i % 3];
       proxy.geometry.dispose();
       proxy.geometry = new THREE.BufferGeometry();
       proxy.geometry.setAttribute('position', new THREE.BufferAttribute(normalized, 3));
@@ -239,7 +240,7 @@ export class Viewport {
   }
 
   setOptions(selection: ShapeId, tool: Tool, reveals: Reveals, locked: boolean, snap: boolean, editingEnabled = true) {
-    this.selection = selection; this.reveals = reveals; this.editingEnabled = editingEnabled;
+    this.selection = shapeEntries(this.state).some(([id]) => id === selection) ? selection : 'a'; this.reveals = reveals; this.editingEnabled = editingEnabled;
     if (locked && !this.locked) this.bookmark = { position: this.camera.position.clone(), target: this.orbit.target.clone() };
     this.locked = locked; this.orbit.enabled = !locked;
     this.currentTool = tool;
@@ -250,8 +251,8 @@ export class Viewport {
     this.guideDirty = true; this.dirty = true;
   }
 
-  private editingCurve() { return this.editingEnabled && this.curveEditing && !!this.state?.[this.selection].spine; }
-  private activePoint() { return Math.min(this.curvePoint, (this.state[this.selection].spine?.length ?? 1) - 1); }
+  private editingCurve() { return this.editingEnabled && this.curveEditing && !!(this.state && getShape(this.state, this.selection).spine); }
+  private activePoint() { return Math.min(this.curvePoint, (getShape(this.state, this.selection).spine?.length ?? 1) - 1); }
   setCurveEditor(active: boolean, point: number) {
     this.curveEditing = active; this.curvePoint = point;
     this.updateCurveControls(); this.attachControls(); this.dirty = true;
@@ -261,13 +262,13 @@ export class Viewport {
     const curve = this.editingCurve(), index = this.activePoint();
     this.transform.setMode(curve ? 'translate' : this.currentTool);
     this.transform.setSpace(curve || this.currentTool === 'scale' ? 'local' : 'world');
-    this.transform.showZ = !curve || (index > 0 && index < this.state[this.selection].spine!.length - 1);
-    const object = curve ? this.curveHandles[index] : this.selection === 'a' ? this.sourceBox : this.sourceCylinder;
+    this.transform.showZ = !curve || (index > 0 && index < getShape(this.state, this.selection).spine!.length - 1);
+    const object = curve ? this.curveHandles[index] : this.proxies[this.selection];
     if (this.transform.object !== object) this.transform.attach(object);
   }
   private updateCurveControls() {
     if (!this.state) return;
-    const shape = this.state[this.selection], visible = this.editingCurve() && !this.locked;
+    const shape = getShape(this.state, this.selection), visible = this.editingCurve() && !this.locked;
     this.curveLine.visible = visible;
     for (const [index, handle] of this.curveHandles.entries()) {
       const point = shape.spine?.[index], button = this.curveButtons[index];
@@ -288,7 +289,7 @@ export class Viewport {
     if (!this.editingCurve() || this.locked) return;
     const [width, height] = this.dimensions;
     this.curveHandles.forEach((handle, i) => {
-      if (!this.state[this.selection].spine?.[i]) return;
+      if (!getShape(this.state, this.selection).spine?.[i]) return;
       const projected = handle.position.clone().project(this.camera), button = this.curveButtons[i];
       button.style.display = Math.abs(projected.z) < 1 && Math.abs(projected.x) < 1 && Math.abs(projected.y) < 1 ? '' : 'none';
       button.style.left = `${(projected.x + 1) * width / 2}px`; button.style.top = `${(1 - projected.y) * height / 2}px`;
@@ -305,8 +306,8 @@ export class Viewport {
 
   fitView() {
     if (this.locked || !this.state) return;
-    const bounds = new THREE.Box3().expandByObject(this.sourceBox, true);
-    if (this.state.operation !== 'single') bounds.expandByObject(this.sourceCylinder, true);
+    const bounds = new THREE.Box3();
+    for (const [id] of shapeEntries(this.state)) bounds.expandByObject(this.proxies[id], true);
     if (bounds.isEmpty()) return;
     const center = bounds.getCenter(new THREE.Vector3());
     const direction = this.camera.position.clone().sub(this.orbit.target).normalize();
@@ -318,7 +319,7 @@ export class Viewport {
     const point = new THREE.Vector3();
     let distance = this.orbit.minDistance;
     // Fit the projected vertices, so foreshortened forms still fill a small screen.
-    for (const mesh of this.state.operation === 'single' ? [this.sourceBox] : [this.sourceBox, this.sourceCylinder]) {
+    for (const mesh of shapeEntries(this.state).map(([id]) => this.proxies[id])) {
       const positions = mesh.geometry.getAttribute('position');
       for (let i = 0; i < positions.count; i++) {
         point.fromBufferAttribute(positions, i).applyMatrix4(mesh.matrixWorld).sub(center);
@@ -355,28 +356,24 @@ export class Viewport {
   }
 
   private updateLines() {
-    const edges = packedEdgeLines(this.featureEdges, this.camera.position);
+    const edges = packedEdgeLines(this.featureEdges, this.camera.position, this.reveals.seam);
     this.setLine(this.lines.contour, edges.contour, true);
-    this.setLine(this.lines.seam, edges.seam, true);
-    for (const material of [this.lines.seam.visible.material, this.lines.seam.hidden.material]) {
-      material.color.set(this.reveals.seam ? '#156f64' : '#34413e');
-      material.linewidth = this.reveals.seam ? 2.5 : 1.8;
-    }
+    this.setLine(this.lines.seam, edges.seam, this.reveals.seam);
     if (!this.renderedScene) return;
-    const study = this.renderedScene;
-    const single = study.operation === 'single';
-    const key = JSON.stringify([study.a, single ? null : study.b, study.contours, this.quality]);
+    const study = this.renderedScene, entries = shapeEntries(study), single = entries.length === 1;
+    const key = JSON.stringify([entries, study.contours, this.quality]);
     if (this.reveals.construction && key !== this.guideCacheKey) {
       this.guideCacheKey = key;
-      this.guideCache = { a: constructionLines(study.a, study.contours, this.quality),
-        b: single ? { sections: [], axis: [] } : constructionLines(study.b, study.contours, this.quality) };
+      this.guideCache = Object.fromEntries(entries.map(([id, shape]) => [id, constructionLines(shape, study.contours, this.quality)]));
     }
-    const a = this.guideCache?.a ?? { sections: [], axis: [] }, b = this.guideCache?.b ?? { sections: [], axis: [] };
-    this.setLine(this.lines.boxGuide, this.reveals.construction && !single ? packedEdgeLines(this.sourceEdges.a, this.camera.position).contour : [], this.reveals.construction && !single);
-    this.setLine(this.lines.cylinderGuide, !single && this.reveals.cutter ? packedEdgeLines(this.sourceEdges.b, this.camera.position).contour : [], !single && this.reveals.cutter);
+    const a = this.guideCache.a ?? { sections: [], axis: [] };
+    const others = entries.slice(1).map(([id]) => this.guideCache[id] ?? { sections: [], axis: [] });
+    this.setLine(this.lines.primaryGuide, this.reveals.construction && !single ? packedEdgeLines(this.sourceEdges.a, this.camera.position).contour : [], this.reveals.construction && !single);
+    const sourceOutlines = !single && this.reveals.cutter ? entries.slice(1).flatMap(([id]) => packedEdgeLines(this.sourceEdges[id] ?? new Float32Array(), this.camera.position).contour) : [];
+    this.setLine(this.lines.otherGuides, sourceOutlines, !single && this.reveals.cutter);
     this.setLine(this.lines.crossA, a.sections, this.reveals.construction);
-    this.setLine(this.lines.crossB, b.sections, this.reveals.construction && !single && this.reveals.cutter);
-    this.setLine(this.lines.axis, [...a.axis, ...(!single && this.reveals.cutter ? b.axis : [])], this.reveals.construction);
+    this.setLine(this.lines.crossOthers, others.flatMap(guide => guide.sections), this.reveals.construction && !single && this.reveals.cutter);
+    this.setLine(this.lines.axis, [...a.axis, ...(!single && this.reveals.cutter ? others.flatMap(guide => guide.axis) : [])], this.reveals.construction);
   }
 
   private resize() {

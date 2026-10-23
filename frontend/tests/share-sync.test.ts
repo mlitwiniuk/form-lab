@@ -6,7 +6,7 @@ import { ShareSync } from '../src/share-sync';
 describe('URL synchronization', () => {
   beforeEach(() => vi.useFakeTimers()); afterEach(() => vi.useRealTimers());
   function fixture() {
-    const state: SharedStudy = { version: 1, scene: cloneScene(PRESETS[9].scene), camera: structuredClone(DEFAULT_CAMERA),
+    const state: SharedStudy = { version: 1, scene: cloneScene(PRESETS.find(p => p.name === 'S-curve')!.scene), camera: structuredClone(DEFAULT_CAMERA),
       reveals: { hidden: false, cutter: true, construction: true, seam: true }, locked: false, focus: false };
     const write = vi.fn(), error = vi.fn();
     return { state, write, error, sync: new ShareSync(() => state, write, error) };
@@ -32,8 +32,8 @@ describe('URL synchronization', () => {
   });
   it('reads undo/redo results instead of caching the previous edit', () => {
     const { state, write, sync } = fixture();
-    state.scene.a.deform.twist = 90; sync.schedule(); state.scene = cloneScene(PRESETS[0].scene);
-    vi.runAllTimers(); expect(decodeStudy(write.mock.calls[0][0])?.scene).toEqual(PRESETS[0].scene);
+    state.scene.a.deform.twist = 90; sync.schedule(); state.scene = cloneScene(PRESETS.find(p => p.name === 'Oblique passage')!.scene);
+    vi.runAllTimers(); expect(decodeStudy(write.mock.calls[0][0])?.scene).toEqual(PRESETS.find(p => p.name === 'Oblique passage')!.scene);
   });
   it('cancels pending writes before navigation or disposal', () => {
     const { sync, write } = fixture(); sync.schedule(); sync.cancel(); vi.runAllTimers(); expect(write).not.toHaveBeenCalled();

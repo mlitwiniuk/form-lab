@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDownToLine, ArrowRight, Box, Check, ChevronDown, ChevronUp, Cylinder, Focus, HelpCircle, Layers3, Link, LockKeyhole, Maximize2, MousePointer2, Move3D, Redo2, Rotate3D, RotateCcw, Shuffle, Undo2, UnlockKeyhole, X } from 'lucide-react';
-import { bendLimit, cloneScene, constrainBend, constrainCurvePoint, curveOffsetLimit, CURVE_GAP, generateRounded, makeShape, PRESETS, SHAPES, shapeName, type Deformation, type ShapeKind, type GeometryResult, type Operation, type Reveals, type SceneState, type ShapeId, type Tool, type Vec3 } from './scene';
+import { ArrowDownToLine, ArrowRight, Box, Check, ChevronDown, ChevronUp, Focus, HelpCircle, Layers3, Plus, Trash2, Link, LockKeyhole, Maximize2, MousePointer2, Move3D, Redo2, Rotate3D, RotateCcw, Shuffle, Undo2, UnlockKeyhole, X } from 'lucide-react';
+import { DEFAULT_SCENE, MAX_SHAPES, addShape, removeShape, shapeEntries, getShape, bendLimit, cloneScene, constrainBend, constrainCurvePoint, curveOffsetLimit, CURVE_GAP, generateRounded, makeShape, PRESETS, SHAPES, shapeName, type Deformation, type ShapeKind, type GeometryResult, type Operation, type Reveals, type SceneState, type ShapeId, type Tool, type Vec3 } from './scene';
 import { Viewport } from './viewport';
 import { GeometryPipeline } from './geometry-pipeline';
 import { curveFromShape, type GeometryQuality } from './forms';
@@ -9,19 +9,20 @@ import { ShareSync } from './share-sync';
 
 const OPERATIONS: { id: Operation; label: string; symbol: string; description: string }[] = [
   { id: 'single', label: 'Single form', symbol: '○', description: 'Study and deform form A on its own' },
-  { id: 'subtract', label: 'Cut', symbol: '−', description: 'Remove form B from form A' },
-  { id: 'union', label: 'Join', symbol: '+', description: 'Join both forms into one solid' },
-  { id: 'intersect', label: 'Shared', symbol: '∩', description: 'Keep only their shared volume' },
-  { id: 'reverse', label: 'Reverse cut', symbol: '↔', description: 'Remove form A from form B' },
-  { id: 'exclude', label: 'Remove overlap', symbol: '⊖', description: 'Keep both forms, removing their shared volume' },
+  { id: 'subtract', label: 'Cut', symbol: '−', description: 'Remove all other forms from form A' },
+  { id: 'union', label: 'Join', symbol: '+', description: 'Join all forms into one solid' },
+  { id: 'intersect', label: 'Shared', symbol: '∩', description: 'Keep only the volume shared by every form' },
+  { id: 'reverse', label: 'Reverse cut', symbol: '↔', description: 'Join the other forms, then remove form A' },
+  { id: 'exclude', label: 'Remove overlap', symbol: '⊖', description: 'Remove the overlap between A and the joined other forms' },
 ];
 const PANELS = [{ id: 'study', label: 'Study' }, { id: 'shape', label: 'Shape' }, { id: 'deform', label: 'Deform' }, { id: 'draw', label: 'Draw' }] as const;
 type Panel = typeof PANELS[number]['id'];
 
 const INITIAL_REVEALS: Reveals = { cutter: true, construction: true, hidden: false, seam: true };
-const freshStudy = (): SharedStudy => ({ version: 1, scene: cloneScene(PRESETS[5].scene),
-  camera: structuredClone(DEFAULT_CAMERA), reveals: { ...INITIAL_REVEALS }, locked: false, focus: false });
-const matchingPreset = (scene: SceneState) => PRESETS.findIndex(p => JSON.stringify(p.scene) === JSON.stringify(scene));
+const freshStudy = (): SharedStudy => ({ version: 2, scene: cloneScene(DEFAULT_SCENE),
+  camera: structuredClone(DEFAULT_CAMERA), reveals: { ...INITIAL_REVEALS, construction: false }, locked: false, focus: false });
+const presetSignatures = PRESETS.map(p => JSON.stringify(p.scene));
+const matchingPreset = (scene: SceneState) => presetSignatures.indexOf(JSON.stringify(scene));
 function initialStudy() {
   try { return { study: decodeStudy(window.location.hash) ?? freshStudy(), error: '', fit: !window.location.hash }; }
   catch (error) { return { study: freshStudy(), fit: true, error: error instanceof Error ? error.message : 'This share link could not be opened.' }; }
@@ -63,7 +64,10 @@ export default function App() {
   const committed = useRef(cloneScene(scene));
   const generatedStudy = useRef(cloneScene(scene));
   const [past, setPast] = useState<SceneState[]>([]), [future, setFuture] = useState<SceneState[]>([]);
-  const [selected, setSelected] = useState<ShapeId>('a');
+  const [selection, setSelected] = useState<ShapeId>('a');
+  const forms = shapeEntries(scene);
+  const selected = forms.some(([id]) => id === selection) ? selection : 'a';
+  const [addKind, setAddKind] = useState<ShapeKind>('box');
   const [tool, setTool] = useState<Tool>('scale');
   const [locked, setLocked] = useState(initial.study.locked), [snap, setSnap] = useState(false);
   const [reveals, setReveals] = useState<Reveals>(initial.study.reveals);
@@ -85,7 +89,7 @@ export default function App() {
   const shareButton = useRef<HTMLButtonElement>(null);
   const sharing = useRef<ShareSync | null>(null), pauseSharing = useRef(!!initial.error);
   const readStudy = useRef<() => SharedStudy>(() => initial.study);
-  readStudy.current = () => ({ version: 1, scene: sceneRef.current,
+  readStudy.current = () => ({ version: 2, scene: sceneRef.current,
     camera: viewport.current?.getCameraState() ?? initial.study.camera, reveals, locked, focus });
   const syncUrl = useCallback((finished = false) => {
     if (pauseSharing.current) return;
@@ -94,7 +98,7 @@ export default function App() {
   }, []);
   const callbacks = useRef({ edit: (_next: SceneState) => {}, commit: () => {}, select: (_id: ShapeId) => {}, drag: (_active: boolean) => {}, point: (_index: number) => {} });
 
-  const edit = useCallback((next: SceneState) => { sceneRef.current = next; setScene(next); syncUrl(); }, [syncUrl]);
+  const edit = useCallback((next: SceneState) => { sceneRef.current = next; setScene(next); setPreset(matchingPreset(next)); syncUrl(); }, [syncUrl]);
   const checkpoint = useCallback(() => {
     syncUrl(true);
     if (JSON.stringify(committed.current) === JSON.stringify(sceneRef.current)) return;
@@ -243,12 +247,12 @@ export default function App() {
   }, [locked, undo, redo, help, exported, manualLink]);
 
   function mutate(change: (next: SceneState) => void, commit = false) {
-    const next = cloneScene(sceneRef.current); change(next); constrainBend(next.a); constrainBend(next.b); edit(next); if (commit) checkpoint();
+    const next = cloneScene(sceneRef.current); change(next); shapeEntries(next, true).forEach(([, shape]) => constrainBend(shape)); edit(next); if (commit) checkpoint();
   }
   function applyPreset(index: number) {
     fitPending.current = true;
-    setPreset(index); edit(cloneScene(PRESETS[index].scene)); checkpoint();
-    setSelected('a'); setLocked(false); setStage(null); setReveals(INITIAL_REVEALS); viewport.current?.setView('perspective');
+    setPreset(index); generatedStudy.current = cloneScene(PRESETS[index].scene); edit(cloneScene(PRESETS[index].scene)); checkpoint();
+    setSelected('a'); setLocked(false); setStage(null); setReveals({ ...INITIAL_REVEALS, construction: PRESETS[index].group !== 'Basics' }); viewport.current?.setView('perspective');
     setCurveEditing(false); setCurvePoint(2);
   }
   function newRounded() {
@@ -260,9 +264,20 @@ export default function App() {
   function setKind(kind: ShapeKind) {
     setCurveEditing(false);
     mutate(next => {
-      const previous = next[selected];
-      next[selected] = { ...makeShape(kind), position: previous.position, rotation: previous.rotation };
+      const previous = getShape(next, selected);
+      Object.assign(previous, makeShape(kind), { position: previous.position, rotation: previous.rotation });
+      delete previous.spine;
     }, true);
+  }
+  function addForm() {
+    fitPending.current = true;
+    mutate(next => { setSelected(addShape(next, addKind)); }, true);
+    setPreset(-1); setCurveEditing(false); setCurvePoint(2); selectPanel('shape');
+  }
+  function removeForm() {
+    fitPending.current = true;
+    mutate(next => { setSelected(removeShape(next, selected)); }, true);
+    setPreset(-1); setCurveEditing(false); setCurvePoint(2);
   }
   function revealStage(index: number) {
     setStage(index);
@@ -290,36 +305,44 @@ export default function App() {
   }
   function closeShareDialog() { setManualLink(null); shareButton.current?.focus(); }
   const volumePercent = metrics ? Math.round((metrics.overlapVolume / metrics.bodyVolume) * 100) : 0;
-  const statusMessage = error ? 'Geometry needs attention' : busy ? (displayQuality === 'preview' ? 'Live preview · refining detail…' : 'Updating geometry…') : metrics?.volume === 0 ? 'The result is empty — move or resize a shape.' : scene.operation !== 'single' && metrics && metrics.overlapVolume < .00001 ? 'The forms do not overlap — move them closer together.' : 'Ready to study';
+  const statusMessage = error ? 'Geometry needs attention' : busy ? (displayQuality === 'preview' ? 'Live preview · refining detail…' : 'Updating geometry…') : metrics?.volume === 0 ? 'The result is empty — move or resize a shape.' : scene.operation !== 'single' && metrics && metrics.overlapVolume < .00001 ? 'No overlap with form A — move a form closer.' : 'Ready to study';
 
   const single = scene.operation === 'single';
-  const curve = scene[selected].spine;
+  const curve = getShape(scene, selected).spine;
   const pointIndex = Math.min(curvePoint, (curve?.length ?? 1) - 1);
   const point = curve?.[pointIndex];
   const editingCurve = !!curve && curveEditing;
   function enableCurve() {
-    mutate(next => { const shape = next[selected]; shape.spine = curveFromShape(shape); shape.deform.bend = 0; }, true);
+    mutate(next => { const shape = getShape(next, selected); shape.spine = curveFromShape(shape); shape.deform.bend = 0; }, true);
     setCurveEditing(true); setCurvePoint(2);
   }
   function movePoint(axis: number, value: number) {
     mutate(next => {
-      const shape = next[selected], position = [...shape.spine![pointIndex].position] as Vec3;
+      const shape = getShape(next, selected), position = [...shape.spine![pointIndex].position] as Vec3;
       position[axis] = value / shape.size[axis];
       shape.spine![pointIndex].position = constrainCurvePoint(shape, pointIndex, position);
     });
   }
   function selectPanel(next: Panel) {
     setPanel(next); setControlsCollapsed(false);
-    setCurveEditing(next === 'deform' && !!sceneRef.current[selected].spine);
+    setCurveEditing(next === 'deform' && !!getShape(sceneRef.current, selected).spine);
   }
   function toggleDrawing() {
     setLocked(!locked); setControlsCollapsed(false);
     selectPanel(locked ? 'shape' : 'draw');
   }
   const revealControls = (keys: (keyof Reveals)[]) => keys.map(key => {
-    const label = { cutter: 'Form B', construction: 'Cross-contours', hidden: 'Hidden lines', seam: 'Intersection' }[key];
+    const label = { cutter: 'Other form outlines', construction: 'Cross-contours', hidden: 'Hidden lines', seam: 'Connection edges' }[key];
     return <button key={key} className={reveals[key] ? 'active' : ''} aria-pressed={reveals[key]} disabled={single && (key === 'cutter' || key === 'seam')} onClick={() => toggleReveal(key)}><span className="toggle-check">{reveals[key] && <Check size={13} strokeWidth={3} />}</span>{label}</button>;
   });
+  const formList = (location: Panel, editable = false) => <section className="form-list" aria-label="Forms in study">
+    <div className="section-caption">FORMS IN YOUR STUDY<span>{forms.length} / {MAX_SHAPES}</span></div>
+    <div className="shape-selector">{forms.map(([id, shape]) => <button key={id} className={selected === id ? 'active' : ''} onClick={() => { setSelected(id); setCurvePoint(2); }} disabled={locked || dragging} aria-pressed={selected === id}>
+      <span className="form-letter">{id.toUpperCase()}</span><span>Form {id.toUpperCase()}<small>{shapeName(shape.kind)}</small></span></button>)}</div>
+    {editable && <><div className="add-form-row"><label className="sr-only" htmlFor={`add-kind-${location}`}>Shape to add</label><div className="select-wrap"><select id={`add-kind-${location}`} value={addKind} onChange={event => setAddKind(event.target.value as ShapeKind)} disabled={locked || dragging || forms.length >= MAX_SHAPES}>{SHAPES.map(shape => <option key={shape.id} value={shape.id}>{shape.label}</option>)}</select><ChevronDown size={14} /></div><button className="secondary-button" disabled={locked || dragging || forms.length >= MAX_SHAPES} onClick={addForm}><Plus size={16} /> Add form</button></div>
+      {forms.length >= MAX_SHAPES && <p className="parameter-tip">All six forms are in use. Remove a form to add another.</p>}
+      {!single && <button className="text-button remove-form" disabled={locked || dragging} onClick={removeForm}><Trash2 size={14} /> Remove form {selected.toUpperCase()}</button>}</>}
+  </section>;
   return <div className={`app ${focus ? 'focus-mode' : ''} ${controlsCollapsed ? 'controls-collapsed' : ''}`}>
     <header className="app-header">
       <a className="brand" href="./" aria-label="Form Lab home"><span className="brand-symbol"><Box size={24} strokeWidth={1.5} /></span>Form Lab<span className="brand-dot">.</span></a>
@@ -338,13 +361,13 @@ export default function App() {
           <div className="view-label"><span className={`live-dot ${busy ? 'busy' : ''}`} />{locked ? 'REFERENCE LOCKED' : 'YOUR REFERENCE'}</div>
           <div className="view-actions"><button className="icon-button" disabled={!past.length || dragging || locked} onClick={undo} title="Undo (⌘/Ctrl Z)" aria-label="Undo"><Undo2 size={18} /></button><button className="icon-button" disabled={!future.length || dragging || locked} onClick={redo} title="Redo (⌘/Ctrl Shift Z)" aria-label="Redo"><Redo2 size={18} /></button><button className="icon-button" onClick={() => setHelp(true)} aria-label="Open controls help" title="Controls & shortcuts"><HelpCircle size={18} /></button><button className="icon-button focus-button" onClick={() => setFocus(!focus)} aria-label={focus ? 'Exit focus mode' : 'Focus mode'} title={focus ? 'Show controls' : 'Hide controls'}>{focus ? <X size={18} /> : <Maximize2 size={18} />}</button></div>
         </div>
-        <div className="camera-row"><span className="canvas-caption">{shapeName(scene.a.kind)}{!single && <><span className="operation-mark">{OPERATIONS.find(item => item.id === scene.operation)?.symbol}</span>{shapeName(scene.b.kind)}</>}</span>
+        <div className="camera-row"><span className="canvas-caption">{single ? shapeName(scene.a.kind) : `${forms.length} forms · ${OPERATIONS.find(item => item.id === scene.operation)?.label}`}</span>
           <div className="view-presets" aria-label="Camera views">{(['perspective', 'front', 'side', 'top'] as const).map(view => <button key={view} disabled={locked} onClick={() => viewport.current?.setView(view)}>{view === 'perspective' ? '3D' : view}</button>)}<button disabled={locked} title="Fit forms to view" aria-label="Fit forms to view" onClick={() => viewport.current?.fitView()}><Focus size={17} /></button></div>
         </div>
         <div className="canvas-container" ref={containerRef} />
         <div className="canvas-hint">{locked ? <><LockKeyhole size={14} /> Reference locked. Reveal lines as you draw.</> : editingCurve ? <>Tap a point · Drag its arrows or use the sliders</> : <><MousePointer2 size={14} /><span className="mouse-hint">Drag to orbit · Scroll to zoom · Right-drag to pan</span><span className="touch-hint">Drag to orbit · Pinch to zoom · Two fingers to pan</span></>}</div>
         {error && <div className="error-message" role="alert"><strong>Let’s recover this view.</strong><p>{error}</p><button onClick={() => { setError(''); setEngineRestart(value => value + 1); }}>Retry geometry</button><button onClick={() => applyPreset(0)}>Reset forms</button></div>}
-        <div className="reveal-bar" aria-label="Quick drawing guides">{revealControls(['construction', 'hidden'])}<button className="more-guides" aria-label="All drawing guides" title="All drawing guides" onClick={() => { setFocus(false); selectPanel('draw'); }}><Layers3 size={16} /><span>All guides</span></button></div>
+        <div className="reveal-bar" aria-label="Quick drawing guides">{revealControls(single ? ['construction', 'hidden'] : ['construction', 'seam'])}<button className="more-guides" aria-label="All drawing guides" title="All drawing guides" onClick={() => { setFocus(false); selectPanel('draw'); }}><Layers3 size={16} /><span>All guides</span></button></div>
       </section>
       <aside className="inspector" aria-label="Study controls">
         <div className="inspector-navigation"><div className="workflow-tabs" role="tablist" aria-label="Study workflow">{PANELS.map((item, index) => <button key={item.id} id={`tab-${item.id}`} role="tab" aria-selected={panel === item.id} aria-controls={`panel-${item.id}`} tabIndex={panel === item.id ? 0 : -1} disabled={dragging} onClick={() => selectPanel(item.id)} onKeyDown={event => {
@@ -357,28 +380,29 @@ export default function App() {
         <div className="inspector-body" id="controls-body" ref={panelBody}>
           {locked && <div className="lock-note"><LockKeyhole size={17} /><span>Your reference is locked for drawing.</span><button onClick={toggleDrawing}>Edit forms</button></div>}
           <section id="panel-study" role="tabpanel" aria-labelledby="tab-study" hidden={panel !== 'study'}>
-            <div className="panel-heading"><span className="eyebrow">01 / START HERE</span><h1>Choose your study.</h1><p>Pick a reference, or generate a rounded form to make your own.</p></div>
-        <div className="study-selector"><label htmlFor="study">Choose a starting point</label><div className="select-wrap"><select id="study" value={preset} onChange={e => applyPreset(Number(e.target.value))} disabled={locked || dragging}>{preset === -1 && <option value={-1}>Custom study</option>}{PRESETS.map((p, i) => <option key={p.name} value={i}>{p.name}</option>)}</select><ChevronDown size={14} /></div>
+            <div className="panel-heading"><span className="eyebrow">01 / START HERE</span><h1>Choose your study.</h1><p>Start with a basic shape, then explore combinations and flowing forms.</p></div>
+        <div className="study-selector"><label htmlFor="study">Choose a starting point</label><div className="select-wrap"><select id="study" value={preset} onChange={e => applyPreset(Number(e.target.value))} disabled={locked || dragging}>{preset === -1 && <option value={-1}>Custom study</option>}{(['Basics', 'Form manipulation', 'Combinations'] as const).map(group => <optgroup key={group} label={group}>{PRESETS.map((p, i) => p.group === group && <option key={p.name} value={i}>{p.name}</option>)}</optgroup>)}</select><ChevronDown size={14} /></div>
           <button className="generator-button" disabled={locked || dragging} onClick={newRounded}><Shuffle size={14} /> New rounded form</button>
         </div>
-        <div className="mode-tabs" aria-label="Study mode">{[{ id: 'single', label: 'Single form' }, { id: 'subtract', label: 'Combine forms' }].map(mode => <button key={mode.id} disabled={locked || dragging} aria-pressed={single === (mode.id === 'single')} className={single === (mode.id === 'single') ? 'active' : ''} onClick={() => { mutate(next => { next.operation = mode.id as Operation; }, true); setSelected('a'); }}>{mode.label}</button>)}</div>
+        <div className="mode-tabs" aria-label="Study mode">{[{ id: 'single', label: 'Single form' }, { id: 'union', label: 'Combine forms' }].map(mode => <button key={mode.id} disabled={locked || dragging} aria-pressed={single === (mode.id === 'single')} className={single === (mode.id === 'single') ? 'active' : ''} onClick={() => { fitPending.current = true; mutate(next => { next.operation = mode.id as Operation; }, true); setSelected('a'); }}>{mode.label}</button>)}</div>
 
+            {!single && formList('study', true)}
             <fieldset disabled={locked || dragging}><legend className="sr-only">Combine forms</legend>
           {!single && <div className="operation-section"><div className="section-caption">HOW THE FORMS COMBINE</div><div className="operation-grid">{OPERATIONS.filter(operation => operation.id !== 'single').map(operation => <button key={operation.id} className={scene.operation === operation.id ? 'active' : ''} aria-pressed={scene.operation === operation.id} title={operation.description} onClick={() => mutate(next => { next.operation = operation.id; }, true)}><span>{operation.symbol}</span>{operation.label}</button>)}</div><p>{OPERATIONS.find(item => item.id === scene.operation)?.description}.</p></div>}
 
-            </fieldset><p className="parameter-tip">{single ? 'Study one volume, or combine two to explore cuts and intersections.' : 'Form A is the main solid. Form B is the second solid or cutting tool.'}</p>
+            </fieldset><p className="parameter-tip">{single ? 'Study one volume, or combine forms to practice their connections.' : 'Form A is the main solid. The other forms join it, overlap it, or cut into it.'}</p>
             <button className="primary-button next-step" onClick={() => selectPanel('shape')}>Adjust shape <ArrowRight size={17} /></button>
           </section>
           <section id="panel-shape" role="tabpanel" aria-labelledby="tab-shape" hidden={panel !== 'shape'}>
             <div className="panel-heading"><span className="eyebrow">02 / BUILD THE FORM</span><h2>Size & position.</h2><p>Choose a form, then adjust its proportions and placement.</p></div>
-        {!single && <div className="shape-selector">{(['a', 'b'] as const).map(id => <button key={id} className={selected === id ? 'active' : ''} onClick={() => setSelected(id)} disabled={locked || dragging} aria-pressed={selected === id}>{id === 'a' ? <Box size={17} /> : <Cylinder size={17} />}<span>Form {id.toUpperCase()}<small>{shapeName(scene[id].kind)}</small></span></button>)}</div>}
+        {formList('shape', true)}
 
             <fieldset disabled={locked || dragging}><legend className="sr-only">Shape editing controls</legend>
-          <label className="shape-kind" htmlFor="shape-kind">{single ? 'SHAPE' : `FORM ${selected.toUpperCase()} SHAPE`}</label><div className="select-wrap"><select id="shape-kind" value={scene[selected].kind} onChange={e => setKind(e.target.value as ShapeKind)}>{SHAPES.map(shape => <option value={shape.id} key={shape.id}>{shape.label}</option>)}</select><ChevronDown size={14} /></div>
+          <label className="shape-kind" htmlFor="shape-kind">{single ? 'SHAPE' : `FORM ${selected.toUpperCase()} SHAPE`}</label><div className="select-wrap"><select id="shape-kind" value={getShape(scene, selected).kind} onChange={e => setKind(e.target.value as ShapeKind)}>{SHAPES.map(shape => <option value={shape.id} key={shape.id}>{shape.label}</option>)}</select><ChevronDown size={14} /></div>
           <div className="tool-tabs">{([{ id: 'scale', label: 'Size', icon: Maximize2 }, { id: 'translate', label: 'Move', icon: Move3D }, { id: 'rotate', label: 'Rotate', icon: Rotate3D }] as const).map(({ id, label, icon: Icon }) => <button key={id} onClick={() => { setTool(id); setCurveEditing(false); }} className={!editingCurve && tool === id ? 'active' : ''} aria-pressed={!editingCurve && tool === id}><Icon size={15} />{label}</button>)}</div>
           <div className="parameter-section"><div className="section-caption">{tool === 'translate' ? 'POSITION' : tool === 'rotate' ? 'ROTATION' : 'DIMENSIONS'}<span>{tool === 'rotate' ? 'degrees' : 'relative units'}</span></div>
-            {tool !== 'scale' ? (['X', 'Y', 'Z'] as const).map((axis, index) => <Slider key={`${selected}-${tool}-${axis}`} label={`${axis} ${tool === 'translate' ? 'position' : 'rotation'}`} value={scene[selected][tool === 'translate' ? 'position' : 'rotation'][index]} min={tool === 'translate' ? -5 : -180} max={tool === 'translate' ? 5 : 180} step={tool === 'translate' ? .05 : 1} suffix={tool === 'rotate' ? '°' : ''} disabled={locked || dragging} onChange={v => mutate(next => { next[selected][tool === 'translate' ? 'position' : 'rotation'][index] = v; })} onCommit={checkpoint} />)
-              : ['Width', 'Height', 'Length'].map((name, index) => <Slider key={`${selected}-${name}`} label={name} value={scene[selected].size[index]} min={.4} max={12} disabled={locked || dragging} onChange={v => mutate(next => { next[selected].size[index] = v; })} onCommit={checkpoint} />)}
+            {tool !== 'scale' ? (['X', 'Y', 'Z'] as const).map((axis, index) => <Slider key={`${selected}-${tool}-${axis}`} label={`${axis} ${tool === 'translate' ? 'position' : 'rotation'}`} value={getShape(scene, selected)[tool === 'translate' ? 'position' : 'rotation'][index]} min={tool === 'translate' ? -5 : -180} max={tool === 'translate' ? 5 : 180} step={tool === 'translate' ? .05 : 1} suffix={tool === 'rotate' ? '°' : ''} disabled={locked || dragging} onChange={v => mutate(next => { getShape(next, selected)[tool === 'translate' ? 'position' : 'rotation'][index] = v; })} onCommit={checkpoint} />)
+              : ['Width', 'Height', 'Length'].map((name, index) => <Slider key={`${selected}-${name}`} label={name} value={getShape(scene, selected).size[index]} min={.4} max={12} disabled={locked || dragging} onChange={v => mutate(next => { getShape(next, selected).size[index] = v; })} onCommit={checkpoint} />)}
 
             <label className="snap-control"><input type="checkbox" checked={snap} onChange={e => setSnap(e.target.checked)} /><span>Snap handles to steps</span><small>{editingCurve ? '0.25' : tool === 'rotate' ? '15°' : tool === 'scale' ? '0.1' : '0.25'}</small></label>
           </div>
@@ -387,19 +411,19 @@ export default function App() {
           </section>
           <section id="panel-deform" role="tabpanel" aria-labelledby="tab-deform" hidden={panel !== 'deform'}>
             <div className="panel-heading"><span className="eyebrow">03 / EXPLORE THE VOLUME</span><h2>Bend, twist & flow.</h2><p>Shape the centerline and thickness, or transform the whole volume.</p></div>
-        {!single && <div className="shape-selector">{(['a', 'b'] as const).map(id => <button key={id} className={selected === id ? 'active' : ''} onClick={() => setSelected(id)} disabled={locked || dragging} aria-pressed={selected === id}>{id === 'a' ? <Box size={17} /> : <Cylinder size={17} />}<span>Form {id.toUpperCase()}<small>{shapeName(scene[id].kind)}</small></span></button>)}</div>}
+        {formList('deform', false)}
 
             <fieldset disabled={locked || dragging}><legend className="sr-only">Deformation controls</legend>
-          {scene[selected].kind === 'rounded' && <section className="curve-editor" aria-label="Centerline editor">
+          {getShape(scene, selected).kind === 'rounded' && <section className="curve-editor" aria-label="Centerline editor">
             <div className="section-caption">CENTERLINE<span>{curve ? `${curve.length} points` : 'Shape the flow'}</span></div>
             {!curve ? <><p className="parameter-tip">Bend in more than one direction and vary the thickness along the form.</p><button className="generator-button" onClick={enableCurve}>Enable control points</button></> : <>
               <div className="mode-tabs curve-mode"><button aria-pressed={curveEditing} className={curveEditing ? 'active' : ''} onClick={() => setCurveEditing(true)}>Edit curve</button><button aria-pressed={!curveEditing} className={!curveEditing ? 'active' : ''} onClick={() => setCurveEditing(false)}>Whole form</button></div>
               {curveEditing && point && <>
                 <div className="point-selector" aria-label="Curve points">{curve.map((_, index) => <button key={index} aria-label={`Edit point ${index + 1}`} aria-pressed={pointIndex === index} className={pointIndex === index ? 'active' : ''} onClick={() => setCurvePoint(index)}>{index + 1}</button>)}</div>
                 <p className="parameter-tip">Point {pointIndex + 1} of {curve.length}. Adjust its position and thickness.</p>
-                <Slider label="Point thickness" min={20} max={180} step={1} suffix="%" value={point.radius * 100} disabled={locked || dragging} onChange={v => mutate(next => { next[selected].spine![pointIndex].radius = v / 100; })} onCommit={checkpoint} />
+                <Slider label="Point thickness" min={20} max={180} step={1} suffix="%" value={point.radius * 100} disabled={locked || dragging} onChange={v => mutate(next => { getShape(next, selected).spine![pointIndex].radius = v / 100; })} onCommit={checkpoint} />
                 {(['Across', 'Depth', 'Along'] as const).map((label, axis) => {
-                  const shape = scene[selected], end = pointIndex === 0 || pointIndex === curve.length - 1;
+                  const shape = getShape(scene, selected), end = pointIndex === 0 || pointIndex === curve.length - 1;
                   const span = Math.floor(curveOffsetLimit(shape, axis) * shape.size[axis] * 100) / 100;
                   const min = axis < 2 ? -span : end ? -shape.size[2] / 2 : Math.ceil((curve[pointIndex - 1].position[2] + CURVE_GAP) * shape.size[2] * 100) / 100;
                   const max = axis < 2 ? span : end ? shape.size[2] / 2 : Math.floor((curve[pointIndex + 1].position[2] - CURVE_GAP) * shape.size[2] * 100) / 100;
@@ -407,20 +431,20 @@ export default function App() {
                 })}
                 <p className="parameter-tip">End points keep their length position. Use Length in Shape to stretch the form. Tight bends need thinner sections.</p>
               </>}
-              <button className="text-button" onClick={() => mutate(next => { next[selected].spine!.forEach(p => { p.position[0] = p.position[1] = 0; }); }, true)}><RotateCcw size={12} /> Straighten centerline</button>
-              <button className="text-button" onClick={() => { mutate(next => { delete next[selected].spine; }, true); setCurveEditing(false); }}>Return to arc bend</button>
+              <button className="text-button" onClick={() => mutate(next => { getShape(next, selected).spine!.forEach(p => { p.position[0] = p.position[1] = 0; }); }, true)}><RotateCcw size={12} /> Straighten centerline</button>
+              <button className="text-button" onClick={() => { mutate(next => { delete getShape(next, selected).spine; }, true); setCurveEditing(false); }}>Return to arc bend</button>
             </>}
           </section>}
           <details className="deform-section" open={!editingCurve}><summary>Deform the volume</summary><p className="parameter-tip">{curve ? 'Twist and profile controls combine with your centerline and local thickness.' : 'Along the form’s own length (Z). Combine controls to explore new volumes.'}</p>
           {([
             { key: 'twist', label: 'Twist', min: -180, max: 180, step: 1, suffix: '°' },
-            { key: 'bend', label: 'Bend', min: -bendLimit(scene[selected]), max: bendLimit(scene[selected]), step: 1, suffix: '°' },
+            { key: 'bend', label: 'Bend', min: -bendLimit(getShape(scene, selected)), max: bendLimit(getShape(scene, selected)), step: 1, suffix: '°' },
             { key: 'taper', label: 'Taper', min: -1.2, max: 1.2, step: .05, suffix: '' },
             { key: 'bulge', label: 'Bulge / pinch', min: -.65, max: .7, step: .05, suffix: '' },
             { key: 'roundness', label: 'Roundness', min: 0, max: 1, step: .05, suffix: '' },
-          ] as const).filter(control => !(curve && control.key === 'bend')).map(control => <Slider key={`${selected}-${control.key}`} label={control.label} min={control.min} max={control.max} step={control.step} suffix={control.suffix} value={scene[selected].deform[control.key]} disabled={locked || dragging} onChange={v => mutate(next => { next[selected].deform[control.key as keyof Deformation] = v; })} onCommit={checkpoint} />)}
+          ] as const).filter(control => !(curve && control.key === 'bend')).map(control => <Slider key={`${selected}-${control.key}`} label={control.label} min={control.min} max={control.max} step={control.step} suffix={control.suffix} value={getShape(scene, selected).deform[control.key]} disabled={locked || dragging} onChange={v => mutate(next => { getShape(next, selected).deform[control.key as keyof Deformation] = v; })} onCommit={checkpoint} />)}
           <p className="parameter-tip">Roundness: 0 = square, 1 = round. Bend range adjusts to the width to keep the form from folding through itself.</p>
-          <button className="text-button" onClick={() => mutate(next => { next[selected].deform = makeShape(next[selected].kind).deform; }, true)}><RotateCcw size={12} /> Clear deformations</button></details>
+          <button className="text-button" onClick={() => mutate(next => { getShape(next, selected).deform = makeShape(getShape(next, selected).kind).deform; }, true)}><RotateCcw size={12} /> Clear deformations</button></details>
 
             </fieldset><button className="primary-button next-step" onClick={() => selectPanel('draw')}>Set up drawing guides <ArrowRight size={17} /></button>
           </section>
@@ -435,6 +459,7 @@ export default function App() {
         </button>)}</div>
 
             <section className="drawing-guides" aria-label="Drawing guides"><h3>Choose what to reveal</h3><div className="guide-toggles">{revealControls(single ? ['construction', 'hidden'] : ['construction', 'hidden', 'cutter', 'seam'])}</div>
+        {!single && <p className="connection-hint">{reveals.seam ? 'Connection edges are shown in green. Turn them off to draw the connections yourself.' : 'Connection edges are hidden. Draw where the forms meet, then turn them on to check.'}</p>}
         <div className="contour-density"><Slider label="Cross-contour count" value={scene.contours} min={1} max={9} step={1} disabled={dragging} onChange={v => { mutate(next => { next.contours = Math.round(v); }); setReveals(value => ({ ...value, construction: true })); }} onCommit={checkpoint} /><p className="parameter-tip">Use fewer sections to practice placing each line with intent.</p></div>
 
             </section><p className="guide-note">{single ? 'Start with 3–5 cross-contours. Their tilt follows the direction of the form.' : 'Construction lines show the original forms, including the parts removed by a cut.'}</p>
@@ -445,8 +470,8 @@ export default function App() {
         </div>
       </aside>
     </main>
-    <footer className="status-bar"><span className={error ? 'status-error' : ''}><span className={`live-dot ${busy ? 'busy' : ''}`} />{statusMessage}</span><span className="geometry-stats">{metrics && !busy && !error ? `${single ? 'Single form' : `${volumePercent}% shared volume`} · ${Math.round(metrics.duration)} ms` : 'Form studies'}</span></footer>
-    {help && <div className="modal-backdrop" onClick={() => setHelp(false)}><section className="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={e => e.stopPropagation()}><button autoFocus className="icon-button close-dialog" aria-label="Close help" onClick={() => setHelp(false)}><X size={18} /></button><div className="eyebrow">A FEW SIMPLE CONTROLS</div><h2 id="help-title">Make yourself at home.</h2><p>Start in Study, adjust size and position in Shape, then bend or twist in Deform. Open Draw for step-by-step practice. Use Deform to twist, bend, taper, pinch, or morph the cross-section. Cross-contours and hidden lines can be revealed independently.</p><dl><dt>Orbit / zoom</dt><dd>Drag / scroll or pinch</dd><dt>Pan</dt><dd>Right-drag · two-finger drag</dd><dt>Move / rotate / size</dt><dd><kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd></dd><dt>Lock / unlock drawing view</dt><dd><kbd>Space</kbd></dd><dt>Reveal hidden lines</dt><dd><kbd>H</kbd></dd><dt>Undo / redo</dt><dd><kbd>⌘ / Ctrl</kbd> + <kbd>Z</kbd> / <kbd>Shift Z</kbd></dd></dl><p className="help-footnote">Use Start drawing to keep the reference still. Save image exports a clean view without the editing handles. The address keeps your current forms and view. Copy share link to reopen or share this study; undo history stays in this visit.</p><button className="primary-button" onClick={() => setHelp(false)}>Got it <ArrowRight size={15} /></button></section></div>}
+    <footer className="status-bar"><span className={error ? 'status-error' : ''}><span className={`live-dot ${busy ? 'busy' : ''}`} />{statusMessage}</span><span className="geometry-stats">{metrics && !busy && !error ? `${single ? 'Single form' : `${volumePercent}% of A shared`} · ${Math.round(metrics.duration)} ms` : 'Form studies'}</span></footer>
+    {help && <div className="modal-backdrop" onClick={() => setHelp(false)}><section className="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={e => e.stopPropagation()}><button autoFocus className="icon-button close-dialog" aria-label="Close help" onClick={() => setHelp(false)}><X size={18} /></button><div className="eyebrow">A FEW SIMPLE CONTROLS</div><h2 id="help-title">Make yourself at home.</h2><p>Start in Study, adjust size and position in Shape, then bend or twist in Deform. Open Draw for step-by-step practice. Use Deform to twist, bend, taper, pinch, or morph the cross-section. Add up to six forms from Shape. Select a form to edit it, or remove it from the study. Cross-contours, hidden lines, and connection edges can be revealed independently.</p><dl><dt>Orbit / zoom</dt><dd>Drag / scroll or pinch</dd><dt>Pan</dt><dd>Right-drag · two-finger drag</dd><dt>Move / rotate / size</dt><dd><kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd></dd><dt>Lock / unlock drawing view</dt><dd><kbd>Space</kbd></dd><dt>Reveal hidden lines</dt><dd><kbd>H</kbd></dd><dt>Undo / redo</dt><dd><kbd>⌘ / Ctrl</kbd> + <kbd>Z</kbd> / <kbd>Shift Z</kbd></dd></dl><p className="help-footnote">Use Start drawing to keep the reference still. Save image exports a clean view without the editing handles. The address keeps your current forms and view. Copy share link to reopen or share this study; undo history stays in this visit.</p><button className="primary-button" onClick={() => setHelp(false)}>Got it <ArrowRight size={15} /></button></section></div>}
     {manualLink && <div className="modal-backdrop" onClick={closeShareDialog}><section className="help-dialog share-dialog" role="dialog" aria-modal="true" aria-labelledby="share-title" onClick={e => e.stopPropagation()}><button className="icon-button close-dialog" aria-label="Close share link" onClick={closeShareDialog}><X size={18} /></button><div className="eyebrow">TAKE YOUR STUDY WITH YOU</div><h2 id="share-title">Copy your share link.</h2><p>Your browser couldn’t copy automatically. Select the link and copy it with ⌘/Ctrl+C.</p><label className="share-link-label">Share link<input autoFocus readOnly value={manualLink} onFocus={e => e.currentTarget.select()} /></label><button className="primary-button" onClick={closeShareDialog}>Done <Check size={15} /></button></section></div>}
     {exported && <div className="modal-backdrop" onClick={() => setExported(null)}><section className="image-dialog" role="dialog" aria-modal="true" aria-labelledby="export-title" onClick={e => e.stopPropagation()}><button autoFocus className="icon-button close-dialog" aria-label="Close image preview" onClick={() => setExported(null)}><X size={18} /></button><div className="eyebrow">YOUR DRAWING REFERENCE</div><h2 id="export-title">Take this study with you.</h2><img src={exported} alt="Exported study without editing handles" /><p>PNG · 2× resolution · current construction reveals</p><a className="primary-button" href={exported} download="form-lab-study.png"><ArrowDownToLine size={15} /> Download PNG</a></section></div>}
   </div>;

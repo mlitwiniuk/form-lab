@@ -59,7 +59,7 @@ describe('editable rounded centerlines', () => {
     for (let i = 0; i < lines.sections.length; i += 3) expect(vertices.has(key(lines.sections.slice(i,i+3)))).toBe(true);
   });
   it('preserves a rounded arc’s point positions when enabling the editor', () => {
-    const shape = cloneScene(PRESETS[5].scene).a, before = createSectionSampler(structuredClone(shape));
+    const shape = cloneScene(PRESETS.find(p => p.name === 'Rounded bean')!.scene).a, before = createSectionSampler(structuredClone(shape));
     shape.spine = curveFromShape(shape); shape.deform.bend = 0;
     const after = createSectionSampler(shape);
     for (let i = 0; i < 5; i++) {

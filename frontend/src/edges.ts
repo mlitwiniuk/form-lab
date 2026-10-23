@@ -58,7 +58,7 @@ export function packEdges(edges: FeatureEdge[]): Float32Array {
 }
 
 /** No vectors, strings, adjacency rebuilding, or per-edge arrays on the render thread. */
-export function packedEdgeLines(edges: Float32Array, camera: Vector3): { contour: number[]; seam: number[] } {
+export function packedEdgeLines(edges: Float32Array, camera: Vector3, showConnections = true): { contour: number[]; seam: number[] } {
   const contour: number[] = [], seam: number[] = [];
   for (let i = 0; i < edges.length;) {
     const x = camera.x - (edges[i] + edges[i + 3]) / 2;
@@ -70,7 +70,8 @@ export function packedEdgeLines(edges: Float32Array, camera: Vector3): { contour
       const k = i + 8 + n * 3, dot = edges[k] * x + edges[k + 1] * y + edges[k + 2] * z;
       front ||= dot > 1e-7; back ||= dot < -1e-7;
     }
-    const out = flags & 1 ? seam : flags & 2 || (front && back) ? contour : null;
+    // A connection can also form the outer silhouette. Keep that outline for the exercise.
+    const out = flags & 1 ? (showConnections ? seam : front && back ? contour : null) : flags & 2 || (front && back) ? contour : null;
     if (out) out.push(edges[i], edges[i + 1], edges[i + 2], edges[i + 3], edges[i + 4], edges[i + 5]);
     i += 8 + count * 3;
   }

@@ -3,7 +3,7 @@ import { zlibSync } from 'fflate';
 import { cloneScene, generateRounded, PRESETS, type SceneState } from '../src/scene';
 import { decodeStudy, DEFAULT_CAMERA, encodeStudy, MAX_SHARE_BYTES, type SharedStudy } from '../src/share-state';
 
-const study = (scene: SceneState = PRESETS[9].scene): SharedStudy => ({ version: 1, scene: cloneScene(scene),
+const study = (scene: SceneState = PRESETS.find(p => p.name === 'S-curve')!.scene): SharedStudy => ({ version: 1, scene: cloneScene(scene),
   camera: structuredClone(DEFAULT_CAMERA), reveals: { construction: true, hidden: true, cutter: false, seam: false },
   locked: true, focus: true });
 function rawLink(value: unknown) {
@@ -28,7 +28,7 @@ describe('share link format', () => {
   });
   it.each(['single', 'subtract', 'union', 'intersect', 'reverse', 'exclude'] as const)('retains both operands for %s', operation => {
     const original = study(); original.scene.operation = operation;
-    original.scene.b = cloneScene(PRESETS[9].scene).a;
+    original.scene.b = cloneScene(PRESETS.find(p => p.name === 'S-curve')!.scene).a;
     original.scene.b.spine![2] = { position: [.123456789012345, -.2, .02], radius: .456789012345 };
     original.scene.a.deform.twist = 147; original.scene.a.rotation = [12, -34, 56];
     original.camera = { position: [12.4, -7.8, 3.9], target: [2.5, 1.5, -.9] };
@@ -39,7 +39,7 @@ describe('share link format', () => {
     expect(() => decodeStudy(hash)).toThrow();
   });
   it('rejects future versions with a useful explanation', () => {
-    expect(() => decodeStudy(rawLink({ ...study(), version: 2 }))).toThrow(/newer or unsupported/);
+    expect(() => decodeStudy(rawLink({ ...study(), version: 3 }))).toThrow(/newer or unsupported/);
   });
   it('checks the checksum, even when the compressed content is otherwise valid', () => {
     const bytes = zlibSync(new TextEncoder().encode(JSON.stringify(study()))); bytes[bytes.length - 1] ^= 1;

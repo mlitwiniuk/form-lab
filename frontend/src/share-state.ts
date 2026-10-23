@@ -1,9 +1,9 @@
 import { unzlibSync, zlibSync } from 'fflate';
-import { validateScene, type Reveals, type SceneState, type Shape, type Vec3 } from './scene';
+import { MAX_SHAPES, validateScene, type Reveals, type SceneState, type Shape, type Vec3 } from './scene';
 
 export interface CameraState { position: Vec3; target: Vec3 }
 export interface SharedStudy {
-  version: 1;
+  version: 1 | 2;
   scene: SceneState;
   camera: CameraState;
   reveals: Reveals;
@@ -58,16 +58,20 @@ function shape(value: unknown): Shape {
 /** Copy only recognized fields. Never merge URL objects into application state. */
 export function parseSharedStudy(value: unknown): SharedStudy {
   const data = record(value);
-  if (data.version !== 1) throw new Error('This link uses a newer or unsupported study format. Try an updated version of Form Lab.');
+  if (data.version !== 1 && data.version !== 2) throw new Error('This link uses a newer or unsupported study format. Try an updated version of Form Lab.');
   const source = record(data.scene), camera = record(data.camera), reveals = record(data.reveals);
   const scene: SceneState = { a: shape(source.a), b: shape(source.b),
     operation: choice(source.operation, ['single', 'subtract', 'union', 'intersect', 'reverse', 'exclude']),
     contours: number(source.contours) };
+  if (source.extraShapes !== undefined) {
+    if (data.version !== 2 || !Array.isArray(source.extraShapes) || source.extraShapes.length > MAX_SHAPES - 2) throw new Error(INVALID);
+    if (source.extraShapes.length) scene.extraShapes = source.extraShapes.map(shape);
+  }
   validateScene(scene);
   const view = { position: vector(camera.position), target: vector(camera.target) };
   const distance = Math.hypot(...view.position.map((n, i) => n - view.target[i]));
   if (distance < 5 - 1e-7 || distance > 45 + 1e-7) throw new Error(INVALID);
-  return { version: 1, scene, camera: view,
+  return { version: data.version, scene, camera: view,
     reveals: { cutter: flag(reveals.cutter), construction: flag(reveals.construction), hidden: flag(reveals.hidden), seam: flag(reveals.seam) },
     locked: flag(data.locked), focus: flag(data.focus) };
 }
@@ -80,7 +84,7 @@ function adler32(bytes: Uint8Array): number {
 }
 
 export function encodeStudy(study: SharedStudy): string {
-  const bytes = new TextEncoder().encode(JSON.stringify(parseSharedStudy(study)));
+  const bytes = new TextEncoder().encode(JSON.stringify(parseSharedStudy({ ...study, version: study.scene.extraShapes?.length ? 2 : study.version })));
   if (bytes.length > MAX_SHARE_BYTES) throw new Error('This study is too large for a share link.');
   const compressed = zlibSync(bytes, { level: 6 });
   const token = btoa(String.fromCharCode(...compressed)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');

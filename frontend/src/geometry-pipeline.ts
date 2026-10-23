@@ -1,4 +1,4 @@
-import { cloneScene, type SceneState } from './scene';
+import { cloneScene, shapeEntries, type SceneState } from './scene';
 import type { GeometryQuality } from './forms';
 import type { RenderGeometry } from './render-geometry';
 
@@ -10,7 +10,7 @@ export interface GeometryWorkerPort {
   onmessage: ((event: MessageEvent<GeometryResponse>) => void) | null;
   onerror: ((event: ErrorEvent) => void) | null;
 }
-export const geometryKey = (scene: SceneState) => JSON.stringify([scene.operation, scene.a, scene.operation === 'single' ? null : scene.b]);
+export const geometryKey = (scene: SceneState) => JSON.stringify([scene.operation, shapeEntries(scene)]);
 export const REFINEMENT_DELAY = 220;
 
 /** One in-flight computation, at most one replaceable pending request. */

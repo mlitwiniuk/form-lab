@@ -16,7 +16,7 @@ class FakeWorker implements GeometryWorkerPort {
     this.onmessage?.({ data } as MessageEvent<GeometryResponse>);
   }
 }
-const scene = (twist: number) => { const value = cloneScene(PRESETS[4].scene); value.a.deform.twist = twist; return value; };
+const scene = (twist: number) => { const value = cloneScene(PRESETS.find(p => p.name === 'Twisted box')!.scene); value.a.deform.twist = twist; return value; };
 const pipelines: GeometryPipeline[] = [];
 function setup() {
   const workers: FakeWorker[] = [];

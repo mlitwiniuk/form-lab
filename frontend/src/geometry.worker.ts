@@ -10,7 +10,7 @@ self.onmessage = async (event: MessageEvent<GeometryRequest>) => {
   try {
     const result = prepareRenderGeometry(evaluateScene(await ready, scene, quality), scene, quality);
     self.postMessage({ revision, result }, { transfer: [...new Set([result.positions.buffer, result.indices.buffer, result.origins.buffer,
-      result.normals.buffer, result.featureEdges.buffer, result.sourceEdges.a.buffer, result.sourceEdges.b.buffer,
+      result.normals.buffer, result.featureEdges.buffer, ...Object.values(result.sourceEdges).map(edges => edges.buffer),
       ...Object.values(result.sources).flatMap(s => [s.positions.buffer, s.indices.buffer, s.origins.buffer])])] });
   } catch (error) {
     self.postMessage({ revision, error: error instanceof Error ? error.message : 'The geometry engine could not complete this edit.' });

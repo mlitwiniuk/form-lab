@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import Module, { type ManifoldToplevel } from 'manifold-3d';
 import { evaluateScene } from '../src/geometry';
 import { edgeLines, extractEdges } from '../src/edges';
-import { cloneScene, DEFAULT_SCENE, PRESETS, SHAPES, makeShape, constrainBend, generateRounded, bendLimit, type Operation } from '../src/scene';
+import { cloneScene, CUT_SCENE as DEFAULT_SCENE, PRESETS, SHAPES, makeShape, constrainBend, generateRounded, bendLimit, type Operation } from '../src/scene';
 import { constructionLines, sectionPoint, shapeMesh, AXIAL_SEGMENTS } from '../src/forms';
 import { Vector3 } from 'three';
 
