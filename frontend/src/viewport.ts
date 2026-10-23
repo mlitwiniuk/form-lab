@@ -41,6 +41,7 @@ export class Viewport {
   private selection: ShapeId = 'a';
   private sourceEdges: Record<ShapeId, Float32Array> = { a: new Float32Array(), b: new Float32Array() };
   private locked = false;
+  private editingEnabled = false;
   private reveals: Reveals = { cutter: true, construction: false, hidden: false, seam: true };
   private observer: ResizeObserver;
   private pointerStart = { x: 0, y: 0 };
@@ -91,6 +92,7 @@ export class Viewport {
     };
     this.orbit = new OrbitControls(this.camera, this.renderer.domElement);
     this.orbit.enableDamping = false;
+    this.orbit.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
     this.orbit.minDistance = 5; this.orbit.maxDistance = 45;
     this.orbit.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
     this.orbit.addEventListener('change', () => {
@@ -236,8 +238,8 @@ export class Viewport {
     this.guideDirty = true; this.dirty = true;
   }
 
-  setOptions(selection: ShapeId, tool: Tool, reveals: Reveals, locked: boolean, snap: boolean) {
-    this.selection = selection; this.reveals = reveals;
+  setOptions(selection: ShapeId, tool: Tool, reveals: Reveals, locked: boolean, snap: boolean, editingEnabled = true) {
+    this.selection = selection; this.reveals = reveals; this.editingEnabled = editingEnabled;
     if (locked && !this.locked) this.bookmark = { position: this.camera.position.clone(), target: this.orbit.target.clone() };
     this.locked = locked; this.orbit.enabled = !locked;
     this.currentTool = tool;
@@ -248,14 +250,14 @@ export class Viewport {
     this.guideDirty = true; this.dirty = true;
   }
 
-  private editingCurve() { return this.curveEditing && !!this.state?.[this.selection].spine; }
+  private editingCurve() { return this.editingEnabled && this.curveEditing && !!this.state?.[this.selection].spine; }
   private activePoint() { return Math.min(this.curvePoint, (this.state[this.selection].spine?.length ?? 1) - 1); }
   setCurveEditor(active: boolean, point: number) {
     this.curveEditing = active; this.curvePoint = point;
     this.updateCurveControls(); this.attachControls(); this.dirty = true;
   }
   private attachControls() {
-    if (this.locked) { this.transform.detach(); return; }
+    if (this.locked || !this.editingEnabled) { this.transform.detach(); return; }
     const curve = this.editingCurve(), index = this.activePoint();
     this.transform.setMode(curve ? 'translate' : this.currentTool);
     this.transform.setSpace(curve || this.currentTool === 'scale' ? 'local' : 'world');
@@ -298,6 +300,33 @@ export class Viewport {
     this.camera.position.fromArray(positions[view]);
     this.orbit.target.set(0, 0, 0); this.orbit.update();
     this.guideDirty = true; this.dirty = true;
+    this.callbacks.view(true);
+  }
+
+  fitView() {
+    if (this.locked || !this.state) return;
+    const bounds = new THREE.Box3().expandByObject(this.sourceBox, true);
+    if (this.state.operation !== 'single') bounds.expandByObject(this.sourceCylinder, true);
+    if (bounds.isEmpty()) return;
+    const center = bounds.getCenter(new THREE.Vector3());
+    const direction = this.camera.position.clone().sub(this.orbit.target).normalize();
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion);
+    const tangentY = Math.tan(radians(this.camera.fov) / 2), tangentX = tangentY * this.camera.aspect;
+    const point = new THREE.Vector3();
+    let distance = this.orbit.minDistance;
+    // Fit the projected vertices, so foreshortened forms still fill a small screen.
+    for (const mesh of this.state.operation === 'single' ? [this.sourceBox] : [this.sourceBox, this.sourceCylinder]) {
+      const positions = mesh.geometry.getAttribute('position');
+      for (let i = 0; i < positions.count; i++) {
+        point.fromBufferAttribute(positions, i).applyMatrix4(mesh.matrixWorld).sub(center);
+        distance = Math.max(distance, point.dot(direction) + 1.2 * Math.max(Math.abs(point.dot(right)) / tangentX, Math.abs(point.dot(up)) / tangentY));
+      }
+    }
+    distance = Math.min(distance, this.orbit.maxDistance);
+    this.orbit.target.copy(center);
+    this.camera.position.copy(center).addScaledVector(direction, distance);
+    this.orbit.update(); this.guideDirty = this.dirty = true;
     this.callbacks.view(true);
   }
 
