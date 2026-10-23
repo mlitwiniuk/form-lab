@@ -3,14 +3,16 @@ import type { GeometryResult, ShapeId, ShapeMap } from './scene';
 
 export interface FeatureEdge { a: Vector3; b: Vector3; normals: Vector3[]; origins: number[]; seam: boolean; crease: boolean }
 
+interface MeshEdge extends FeatureEdge { triangles: number[] }
+
 /** Weld position-equivalent vertices, then classify edges by surface provenance and angle. */
-export function extractEdges(mesh: Pick<GeometryResult, 'positions' | 'indices' | 'origins'>): FeatureEdge[] {
+export function extractEdges(mesh: Pick<GeometryResult, 'positions' | 'indices' | 'origins'>): MeshEdge[] {
   const { positions, indices, origins } = mesh;
   const vertices = Array.from({ length: positions.length / 3 }, (_, i) => new Vector3().fromArray(positions, i * 3));
   // Manifold duplicates exact positions for normal/property seams. Rounding here
   // collapses short Boolean edges and can invent boundaries on deformed solids.
   const keys = vertices.map(v => [v.x, v.y, v.z].join(','));
-  const edges = new Map<string, FeatureEdge>();
+  const edges = new Map<string, MeshEdge>();
   for (let i = 0; i < indices.length; i += 3) {
     const ids = [indices[i], indices[i + 1], indices[i + 2]];
     const [a, b, c] = ids.map(id => vertices[id]);
@@ -19,8 +21,8 @@ export function extractEdges(mesh: Pick<GeometryResult, 'positions' | 'indices' 
       const from = ids[j], to = ids[(j + 1) % 3];
       const key = [keys[from], keys[to]].sort().join('|');
       let edge = edges.get(key);
-      if (!edge) { edge = { a: vertices[from], b: vertices[to], normals: [], origins: [], seam: false, crease: false }; edges.set(key, edge); }
-      edge.normals.push(normal); edge.origins.push(origins[i / 3]);
+      if (!edge) { edge = { a: vertices[from], b: vertices[to], normals: [], origins: [], triangles: [], seam: false, crease: false }; edges.set(key, edge); }
+      edge.normals.push(normal); edge.origins.push(origins[i / 3]); edge.triangles.push(i / 3);
     }
   }
   for (const edge of edges.values()) {

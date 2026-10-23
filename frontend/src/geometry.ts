@@ -1,5 +1,6 @@
 import type { ManifoldToplevel, Manifold, Mat4 } from 'manifold-3d';
 import { shapeEntries, shapeMatrix, validateScene, type GeometryResult, type MeshData, type SceneState, type Shape, type ShapeMap } from './scene';
+import { exteriorConnectionEdges } from './connection-edges';
 import { RESOLUTIONS, shapeMesh, type GeometryQuality } from './forms';
 
 function readMesh(solid: Manifold): MeshData & { normals: Float32Array } {
@@ -29,24 +30,31 @@ export function evaluateScene(wasm: ManifoldToplevel, scene: SceneState, quality
   try {
     const empty = { positions: new Float32Array(), indices: new Uint32Array(), origins: new Uint32Array() };
     const sources: ShapeMap<MeshData> = { a: empty, b: empty };
+    const originals = new Map<number, Manifold>();
     const solids = shapeEntries(scene).map(([id, shape]) => {
       const source = create(shape);
       sources[id] = readMesh(own(source.calculateNormals(0, 30)));
-      return own(source.transform(shapeMatrix(shape).elements as Mat4));
+      const transformed = own(source.transform(shapeMatrix(shape).elements as Mat4));
+      for (const origin of new Set(sources[id]!.origins)) originals.set(origin, transformed);
+      return transformed;
     });
     const [a, ...others] = solids;
-    let result = a, bVolume = 0;
+    let result = a, exterior = a, bVolume = 0;
     if (others.length) {
+      // One exterior for every active form, independent of A's role in the chosen operation.
+      const b = others.slice(1).reduce((current, next) => own(current.add(next)), others[0]);
+      exterior = own(a.add(b));
+      bVolume = b.volume();
       if (scene.operation === 'intersect') {
         result = others.reduce((current, next) => own(current.intersect(next)), a);
       } else {
         // Treat all additional forms as one operand for cuts and overlap removal.
-        const b = others.slice(1).reduce((current, next) => own(current.add(next)), others[0]);
-        bVolume = b.volume();
-        result = scene.operation === 'union' ? own(a.add(b)) : scene.operation === 'reverse' ? own(b.subtract(a))
+        result = scene.operation === 'union' ? exterior : scene.operation === 'reverse' ? own(b.subtract(a))
           : scene.operation === 'exclude' ? own(own(a.subtract(b)).add(own(b.subtract(a)))) : own(a.subtract(b));
       }
     }
+    if (exterior.status() !== 'NoError') throw new Error(`The connected exterior could not be computed (${exterior.status()}).`);
+    const connectionEdges = others.length ? exteriorConnectionEdges(readMesh(exterior), originals) : new Float32Array();
     if (result.status() !== 'NoError') throw new Error(`The geometry could not be computed (${result.status()}).`);
     const shaded = own(result.calculateNormals(0, 30));
     const volume = result.volume(), bodyVolume = a.volume();
@@ -54,7 +62,7 @@ export function evaluateScene(wasm: ManifoldToplevel, scene: SceneState, quality
     const overlapVolume = scene.operation === 'single' ? 0 : scene.operation === 'intersect' ? volume
       : scene.operation === 'subtract' ? bodyVolume - volume : scene.operation === 'reverse' ? bVolume - volume
       : (bodyVolume + bVolume - volume) / (scene.operation === 'exclude' ? 2 : 1);
-    return { ...readMesh(shaded), sources,
+    return { ...readMesh(shaded), sources, connectionEdges,
       volume, bodyVolume, overlapVolume: Math.max(0, overlapVolume), duration: performance.now() - start };
 
   } finally { owned.reverse().forEach(m => m.delete()); }

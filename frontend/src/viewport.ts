@@ -30,6 +30,7 @@ export class Viewport {
   private formSurfaces = {} as Record<ShapeId, THREE.Mesh>;
   private proxies = SHAPE_IDS.reduce((proxies, id) => { proxies[id] = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)); return proxies; }, {} as Record<ShapeId, THREE.Mesh>);
   private lines: Record<'contour' | 'wireForms' | 'seam' | 'primaryGuide' | 'otherGuides' | 'crossA' | 'crossOthers' | 'axis', LinePair>;
+  private connectionEdges: Float32Array = new Float32Array();
   private featureEdges: Float32Array = new Float32Array();
   private renderedScene: SceneState | null = null;
   private quality: GeometryQuality = 'final';
@@ -251,6 +252,7 @@ export class Viewport {
       surface.matrix.copy(shapeMatrix(shape)); surface.matrixWorldNeedsUpdate = true;
     }
     this.featureEdges = result.featureEdges;
+    this.connectionEdges = result.connectionEdges;
     this.sourceEdges = result.sourceEdges;
     this.guideDirty = true; this.dirty = true;
   }
@@ -376,7 +378,8 @@ export class Viewport {
   }
 
   private updateLines() {
-    const edges = packedEdgeLines(this.featureEdges, this.camera.position, this.reveals.seam);
+    // Keep the result silhouette independent of the all-form connection reveal.
+    const edges = packedEdgeLines(this.featureEdges, this.camera.position, false);
     if (!this.state) return;
     const appearance = referenceAppearance(this.state, this.display), originalForms = !appearance.result;
     const outlines = (ids: ShapeId[]) => sourceEdgeLines(this.sourceEdges, this.camera.position, ids);
@@ -384,7 +387,9 @@ export class Viewport {
     for (const id of SHAPE_IDS) this.formSurfaces[id].visible = appearance.solidForms.includes(id);
     this.setLine(this.lines.contour, appearance.result ? edges.contour : outlines(appearance.solidForms), true);
     this.setLine(this.lines.wireForms, outlines(appearance.wireForms), originalForms, false);
-    this.setLine(this.lines.seam, edges.seam, this.reveals.seam, appearance.result && this.reveals.hidden);
+    // Reveal exterior joins of all forms, never the operation-specific cavity edges.
+    const connections = this.reveals.seam ? packedEdgeLines(this.connectionEdges, this.camera.position).seam : [];
+    this.setLine(this.lines.seam, connections, this.reveals.seam, appearance.result && this.reveals.hidden);
     if (!this.renderedScene) return;
     const study = this.renderedScene, entries = shapeEntries(study), single = entries.length === 1;
     const key = JSON.stringify([entries, study.contours, this.quality]);

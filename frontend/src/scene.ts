@@ -19,6 +19,7 @@ export interface Reveals { cutter: boolean; construction: boolean; hidden: boole
 export interface MeshData { normals?: Float32Array; positions: Float32Array; indices: Uint32Array; origins: Uint32Array }
 export interface GeometryResult extends MeshData {
   normals: Float32Array; sources: ShapeMap<MeshData>;
+  connectionEdges: Float32Array;
   volume: number; bodyVolume: number; overlapVolume: number; duration: number;
 }
 export const SHAPES: { id: ShapeKind; label: string }[] = [
