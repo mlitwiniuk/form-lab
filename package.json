@@ -1,0 +1,13 @@
+{
+  "name": "form-lab",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "setup": "npm --prefix frontend ci",
+    "dev": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "test": "npm --prefix frontend test",
+    "preview": "npm --prefix frontend run preview"
+  },
+  "engines": { "node": ">=22.12.0" }
+}
