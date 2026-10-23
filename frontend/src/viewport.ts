@@ -312,7 +312,9 @@ export class Viewport {
     const direction = this.camera.position.clone().sub(this.orbit.target).normalize();
     const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion);
-    const tangentY = Math.tan(radians(this.camera.fov) / 2), tangentX = tangentY * this.camera.aspect;
+    const verticalTangent = Math.tan(radians(this.camera.fov) / 2);
+    // Fit within the shorter dimension so rotating a device keeps the whole form visible.
+    const tangentY = verticalTangent * Math.min(1, this.camera.aspect), tangentX = tangentY;
     const point = new THREE.Vector3();
     let distance = this.orbit.minDistance;
     // Fit the projected vertices, so foreshortened forms still fill a small screen.
