@@ -52,7 +52,7 @@ describe('share link format', () => {
     expect(() => decodeStudy(hash)).toThrow();
   });
   it('rejects future versions with a useful explanation', () => {
-    expect(() => decodeStudy(rawLink({ ...study(), version: 4 }))).toThrow(/newer or unsupported/);
+    expect(() => decodeStudy(rawLink({ ...study(), version: 5 }))).toThrow(/newer or unsupported/);
   });
   it('checks the checksum, even when the compressed content is otherwise valid', () => {
     const bytes = zlibSync(new TextEncoder().encode(JSON.stringify(study()))); bytes[bytes.length - 1] ^= 1;

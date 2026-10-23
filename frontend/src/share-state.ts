@@ -1,9 +1,9 @@
 import { unzlibSync, zlibSync } from 'fflate';
-import { MAX_SHAPES, validateScene, type DisplayMode, type Reveals, type SceneState, type Shape, type Vec3 } from './scene';
+import { MAX_SHAPES, shapeEntries, validateScene, type DisplayMode, type FormAppearance, type Reveals, type SceneState, type Shape, type Vec3 } from './scene';
 
 export interface CameraState { position: Vec3; target: Vec3 }
 export interface SharedStudy {
-  version: 1 | 2 | 3;
+  version: 1 | 2 | 3 | 4;
   display?: DisplayMode;
   scene: SceneState;
   camera: CameraState;
@@ -38,7 +38,7 @@ function choice<T extends string>(value: unknown, choices: readonly T[]): T {
   if (typeof value !== 'string' || !choices.includes(value as T)) throw new Error(INVALID);
   return value as T;
 }
-function shape(value: unknown): Shape {
+function shape(value: unknown, allowAppearance = false): Shape {
   const data = record(value), deform = record(data.deform);
   const result: Shape = {
     kind: choice(data.kind, ['box', 'cylinder', 'sphere', 'cone', 'rounded']),
@@ -46,6 +46,10 @@ function shape(value: unknown): Shape {
     deform: { twist: number(deform.twist), bend: number(deform.bend), taper: number(deform.taper),
       bulge: number(deform.bulge), roundness: number(deform.roundness) },
   };
+  if (data.appearance !== undefined) {
+    if (!allowAppearance) throw new Error(INVALID);
+    result.appearance = choice<FormAppearance>(data.appearance, ['solid', 'wireframe']);
+  }
   if (data.spine !== undefined) {
     if (!Array.isArray(data.spine) || data.spine.length < 3 || data.spine.length > 7) throw new Error(INVALID);
     result.spine = data.spine.map(value => {
@@ -59,20 +63,20 @@ function shape(value: unknown): Shape {
 /** Copy only recognized fields. Never merge URL objects into application state. */
 export function parseSharedStudy(value: unknown): SharedStudy {
   const data = record(value);
-  if (data.version !== 1 && data.version !== 2 && data.version !== 3) throw new Error('This link uses a newer or unsupported study format. Try an updated version of Form Lab.');
+  if (data.version !== 1 && data.version !== 2 && data.version !== 3 && data.version !== 4) throw new Error('This link uses a newer or unsupported study format. Try an updated version of Form Lab.');
   const source = record(data.scene), camera = record(data.camera), reveals = record(data.reveals);
-  const scene: SceneState = { a: shape(source.a), b: shape(source.b),
+  const scene: SceneState = { a: shape(source.a, data.version === 4), b: shape(source.b, data.version === 4),
     operation: choice(source.operation, ['single', 'subtract', 'union', 'intersect', 'reverse', 'exclude']),
     contours: number(source.contours) };
   if (source.extraShapes !== undefined) {
     if (data.version === 1 || !Array.isArray(source.extraShapes) || source.extraShapes.length > MAX_SHAPES - 2) throw new Error(INVALID);
-    if (source.extraShapes.length) scene.extraShapes = source.extraShapes.map(shape);
+    if (source.extraShapes.length) scene.extraShapes = source.extraShapes.map(value => shape(value, data.version === 4));
   }
   validateScene(scene);
   const view = { position: vector(camera.position), target: vector(camera.target) };
   const distance = Math.hypot(...view.position.map((n, i) => n - view.target[i]));
   if (distance < 5 - 1e-7 || distance > 45 + 1e-7) throw new Error(INVALID);
-  return { version: data.version, ...(data.version === 3 ? { display: choice<DisplayMode>(data.display, ['solid', 'wireframe']) } : {}), scene, camera: view,
+  return { version: data.version, ...(data.version >= 3 ? { display: choice<DisplayMode>(data.display, data.version === 4 ? ['solid', 'wireframe', 'forms'] : ['solid', 'wireframe']) } : {}), scene, camera: view,
     reveals: { cutter: flag(reveals.cutter), construction: flag(reveals.construction), hidden: flag(reveals.hidden), seam: flag(reveals.seam) },
     locked: flag(data.locked), focus: flag(data.focus) };
 }
@@ -85,7 +89,9 @@ function adler32(bytes: Uint8Array): number {
 }
 
 export function encodeStudy(study: SharedStudy): string {
-  const bytes = new TextEncoder().encode(JSON.stringify(parseSharedStudy({ ...study, version: study.display !== undefined ? 3 : study.scene.extraShapes?.length ? Math.max(2, study.version) : study.version })));
+  const version = study.display === 'forms' || shapeEntries(study.scene, true).some(([, shape]) => shape.appearance !== undefined) ? 4
+    : study.display !== undefined ? Math.max(3, study.version) : study.scene.extraShapes?.length ? Math.max(2, study.version) : study.version;
+  const bytes = new TextEncoder().encode(JSON.stringify(parseSharedStudy({ ...study, version })));
   if (bytes.length > MAX_SHARE_BYTES) throw new Error('This study is too large for a share link.');
   const compressed = zlibSync(bytes, { level: 6 });
   const token = btoa(String.fromCharCode(...compressed)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');

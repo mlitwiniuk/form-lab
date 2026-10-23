@@ -10,7 +10,7 @@ export interface GeometryWorkerPort {
   onmessage: ((event: MessageEvent<GeometryResponse>) => void) | null;
   onerror: ((event: ErrorEvent) => void) | null;
 }
-export const geometryKey = (scene: SceneState) => JSON.stringify([scene.operation, shapeEntries(scene)]);
+export const geometryKey = (scene: SceneState) => JSON.stringify([scene.operation, shapeEntries(scene)], (key, value) => key === 'appearance' ? undefined : value);
 export const REFINEMENT_DELAY = 220;
 
 /** One in-flight computation, at most one replaceable pending request. */

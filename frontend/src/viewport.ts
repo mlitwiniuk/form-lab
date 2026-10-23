@@ -5,6 +5,7 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { packedEdgeLines, sourceEdgeLines } from './edges';
+import { referenceAppearance } from './appearance';
 import type { RenderGeometry } from './render-geometry';
 import { SHAPE_IDS, shapeEntries, getShape, cloneScene, constrainBend, constrainCurvePoint, shapeMatrix, radians, type DisplayMode, type Reveals, type SceneState, type ShapeId, type ShapeMap, type Tool, type Vec3 } from './scene';
 import { constructionLines, createSectionSampler, type GeometryQuality } from './forms';
@@ -26,8 +27,9 @@ export class Viewport {
   readonly orbit: OrbitControls;
   readonly transform: TransformControls;
   private solid: THREE.Mesh;
+  private formSurfaces = {} as Record<ShapeId, THREE.Mesh>;
   private proxies = SHAPE_IDS.reduce((proxies, id) => { proxies[id] = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)); return proxies; }, {} as Record<ShapeId, THREE.Mesh>);
-  private lines: Record<'contour' | 'seam' | 'primaryGuide' | 'otherGuides' | 'crossA' | 'crossOthers' | 'axis', LinePair>;
+  private lines: Record<'contour' | 'wireForms' | 'seam' | 'primaryGuide' | 'otherGuides' | 'crossA' | 'crossOthers' | 'axis', LinePair>;
   private featureEdges: Float32Array = new Float32Array();
   private renderedScene: SceneState | null = null;
   private quality: GeometryQuality = 'final';
@@ -77,6 +79,11 @@ export class Viewport {
       polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
     }));
     this.world.add(this.solid);
+    for (const id of SHAPE_IDS) {
+      const surface = new THREE.Mesh(new THREE.BufferGeometry(), (this.solid.material as THREE.MeshStandardMaterial).clone());
+      surface.visible = false; surface.matrixAutoUpdate = false;
+      this.formSurfaces[id] = surface; this.world.add(surface);
+    }
     for (const [id, proxy] of Object.entries(this.proxies)) {
       proxy.userData.shapeId = id;
       proxy.material = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
@@ -84,6 +91,7 @@ export class Viewport {
     }
     this.lines = {
       contour: this.makeLinePair('#34413e', 1.8),
+      wireForms: this.makeLinePair('#34413e', 1.8),
       seam: this.makeLinePair('#156f64', 2.5),
       primaryGuide: this.makeLinePair('#969c95', 1),
       otherGuides: this.makeLinePair('#bc8062', 1.25),
@@ -173,7 +181,7 @@ export class Viewport {
     return { visible, hidden };
   }
 
-  private setLine(pair: LinePair, points: number[], show: boolean, hidden = this.display === 'solid' && this.reveals.hidden) {
+  private setLine(pair: LinePair, points: number[], show: boolean, hidden = this.display !== 'wireframe' && this.reveals.hidden) {
     pair.visible.visible = show && points.length > 0;
     pair.hidden.visible = show && hidden && points.length > 0;
     if (!show || !points.length) return;
@@ -234,6 +242,13 @@ export class Viewport {
       proxy.geometry = new THREE.BufferGeometry();
       proxy.geometry.setAttribute('position', new THREE.BufferAttribute(normalized, 3));
       proxy.geometry.setIndex(new THREE.BufferAttribute(source.indices, 1));
+      const surface = this.formSurfaces[id];
+      surface.geometry.dispose();
+      surface.geometry = new THREE.BufferGeometry();
+      surface.geometry.setAttribute('position', new THREE.BufferAttribute(source.positions, 3));
+      surface.geometry.setIndex(new THREE.BufferAttribute(source.indices, 1));
+      surface.geometry.setAttribute('normal', new THREE.BufferAttribute(source.normals!, 3));
+      surface.matrix.copy(shapeMatrix(shape)); surface.matrixWorldNeedsUpdate = true;
     }
     this.featureEdges = result.featureEdges;
     this.sourceEdges = result.sourceEdges;
@@ -243,8 +258,9 @@ export class Viewport {
   setOptions(selection: ShapeId, tool: Tool, reveals: Reveals, locked: boolean, snap: boolean, editingEnabled = true, display: DisplayMode = 'solid') {
     this.selection = shapeEntries(this.state).some(([id]) => id === selection) ? selection : 'a'; this.reveals = reveals; this.editingEnabled = editingEnabled;
     this.display = display;
-    this.solid.visible = display === 'solid';
-    for (const pair of Object.values(this.lines)) pair.visible.material.depthTest = display === 'solid';
+    this.lines.contour.visible.material.depthTest = true;
+    this.lines.wireForms.visible.material.depthTest = false;
+    for (const key of ['seam', 'primaryGuide', 'otherGuides', 'crossA', 'crossOthers', 'axis'] as const) this.lines[key].visible.material.depthTest = display === 'solid';
     if (locked && !this.locked) this.bookmark = { position: this.camera.position.clone(), target: this.orbit.target.clone() };
     this.locked = locked; this.orbit.enabled = !locked;
     this.currentTool = tool;
@@ -361,9 +377,14 @@ export class Viewport {
 
   private updateLines() {
     const edges = packedEdgeLines(this.featureEdges, this.camera.position, this.reveals.seam);
-    const wireframe = this.display === 'wireframe';
-    this.setLine(this.lines.contour, wireframe ? sourceEdgeLines(this.sourceEdges, this.camera.position) : edges.contour, true);
-    this.setLine(this.lines.seam, edges.seam, this.reveals.seam);
+    if (!this.state) return;
+    const appearance = referenceAppearance(this.state, this.display), originalForms = !appearance.result;
+    const outlines = (ids: ShapeId[]) => sourceEdgeLines(this.sourceEdges, this.camera.position, ids);
+    this.solid.visible = appearance.result;
+    for (const id of SHAPE_IDS) this.formSurfaces[id].visible = appearance.solidForms.includes(id);
+    this.setLine(this.lines.contour, appearance.result ? edges.contour : outlines(appearance.solidForms), true);
+    this.setLine(this.lines.wireForms, outlines(appearance.wireForms), originalForms, false);
+    this.setLine(this.lines.seam, edges.seam, this.reveals.seam, appearance.result && this.reveals.hidden);
     if (!this.renderedScene) return;
     const study = this.renderedScene, entries = shapeEntries(study), single = entries.length === 1;
     const key = JSON.stringify([entries, study.contours, this.quality]);
@@ -373,12 +394,12 @@ export class Viewport {
     }
     const a = this.guideCache.a ?? { sections: [], axis: [] };
     const others = entries.slice(1).map(([id]) => this.guideCache[id] ?? { sections: [], axis: [] });
-    this.setLine(this.lines.primaryGuide, !wireframe && this.reveals.construction && !single ? packedEdgeLines(this.sourceEdges.a, this.camera.position).contour : [], !wireframe && this.reveals.construction && !single);
-    const sourceOutlines = !wireframe && !single && this.reveals.cutter ? entries.slice(1).flatMap(([id]) => packedEdgeLines(this.sourceEdges[id] ?? new Float32Array(), this.camera.position).contour) : [];
-    this.setLine(this.lines.otherGuides, sourceOutlines, !wireframe && !single && this.reveals.cutter);
+    this.setLine(this.lines.primaryGuide, !originalForms && this.reveals.construction && !single ? packedEdgeLines(this.sourceEdges.a, this.camera.position).contour : [], !originalForms && this.reveals.construction && !single);
+    const sourceOutlines = !originalForms && !single && this.reveals.cutter ? entries.slice(1).flatMap(([id]) => packedEdgeLines(this.sourceEdges[id] ?? new Float32Array(), this.camera.position).contour) : [];
+    this.setLine(this.lines.otherGuides, sourceOutlines, !originalForms && !single && this.reveals.cutter);
     this.setLine(this.lines.crossA, a.sections, this.reveals.construction);
-    this.setLine(this.lines.crossOthers, others.flatMap(guide => guide.sections), this.reveals.construction && !single && (wireframe || this.reveals.cutter));
-    this.setLine(this.lines.axis, [...a.axis, ...(!single && (wireframe || this.reveals.cutter) ? others.flatMap(guide => guide.axis) : [])], this.reveals.construction);
+    this.setLine(this.lines.crossOthers, others.flatMap(guide => guide.sections), this.reveals.construction && !single && (originalForms || this.reveals.cutter));
+    this.setLine(this.lines.axis, [...a.axis, ...(!single && (originalForms || this.reveals.cutter) ? others.flatMap(guide => guide.axis) : [])], this.reveals.construction);
   }
 
   private resize() {

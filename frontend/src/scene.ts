@@ -7,15 +7,16 @@ export const MAX_SHAPES = SHAPE_IDS.length;
 export type ShapeMap<T> = Record<'a' | 'b', T> & Partial<Record<ShapeId, T>>;
 export type ShapeKind = 'box' | 'cylinder' | 'sphere' | 'cone' | 'rounded';
 export type Operation = 'single' | 'subtract' | 'union' | 'intersect' | 'reverse' | 'exclude';
-export type DisplayMode = 'solid' | 'wireframe';
+export type FormAppearance = 'solid' | 'wireframe';
+export type DisplayMode = FormAppearance | 'forms';
 export type Tool = 'translate' | 'rotate' | 'scale';
 export interface Deformation { twist: number; bend: number; taper: number; bulge: number; roundness: number }
 /** Positions are in shape-relative units; radius is a local thickness multiplier. */
 export interface CurvePoint { position: Vec3; radius: number }
-export interface Shape { kind: ShapeKind; size: Vec3; position: Vec3; rotation: Vec3; deform: Deformation; spine?: CurvePoint[] }
+export interface Shape { appearance?: FormAppearance; kind: ShapeKind; size: Vec3; position: Vec3; rotation: Vec3; deform: Deformation; spine?: CurvePoint[] }
 export interface SceneState { a: Shape; b: Shape; extraShapes?: Shape[]; operation: Operation; contours: number }
 export interface Reveals { cutter: boolean; construction: boolean; hidden: boolean; seam: boolean }
-export interface MeshData { positions: Float32Array; indices: Uint32Array; origins: Uint32Array }
+export interface MeshData { normals?: Float32Array; positions: Float32Array; indices: Uint32Array; origins: Uint32Array }
 export interface GeometryResult extends MeshData {
   normals: Float32Array; sources: ShapeMap<MeshData>;
   volume: number; bodyVolume: number; overlapVolume: number; duration: number;

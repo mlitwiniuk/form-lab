@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowDownToLine, ArrowRight, Box, Check, ChevronDown, ChevronUp, Focus, HelpCircle, Layers3, Plus, Trash2, Link, LockKeyhole, Maximize2, MousePointer2, Move3D, Redo2, Rotate3D, RotateCcw, Shuffle, Undo2, UnlockKeyhole, X } from 'lucide-react';
-import { DEFAULT_SCENE, MAX_SHAPES, addShape, removeShape, shapeEntries, getShape, bendLimit, cloneScene, constrainBend, constrainCurvePoint, curveOffsetLimit, CURVE_GAP, generateRounded, makeShape, PRESETS, SHAPES, shapeName, type DisplayMode, type Deformation, type ShapeKind, type GeometryResult, type Operation, type Reveals, type SceneState, type ShapeId, type Tool, type Vec3 } from './scene';
+import { DEFAULT_SCENE, MAX_SHAPES, addShape, removeShape, shapeEntries, getShape, bendLimit, cloneScene, constrainBend, constrainCurvePoint, curveOffsetLimit, CURVE_GAP, generateRounded, makeShape, PRESETS, SHAPES, shapeName, type FormAppearance, type DisplayMode, type Deformation, type ShapeKind, type GeometryResult, type Operation, type Reveals, type SceneState, type ShapeId, type Tool, type Vec3 } from './scene';
+import { formAppearance, referenceAppearance, setFormAppearance } from './appearance';
 import { Viewport } from './viewport';
 import { GeometryPipeline } from './geometry-pipeline';
 import { curveFromShape, type GeometryQuality } from './forms';
@@ -19,10 +20,11 @@ const PANELS = [{ id: 'study', label: 'Study' }, { id: 'shape', label: 'Shape' }
 type Panel = typeof PANELS[number]['id'];
 
 const INITIAL_REVEALS: Reveals = { cutter: true, construction: true, hidden: false, seam: true };
-const freshStudy = (): SharedStudy => ({ version: 3, display: 'wireframe', scene: cloneScene(DEFAULT_SCENE),
+const freshStudy = (): SharedStudy => ({ version: 4, display: 'wireframe', scene: cloneScene(DEFAULT_SCENE),
   camera: structuredClone(DEFAULT_CAMERA), reveals: { ...INITIAL_REVEALS, construction: false, seam: false }, locked: false, focus: false });
-const presetSignatures = PRESETS.map(p => JSON.stringify(p.scene));
-const matchingPreset = (scene: SceneState) => presetSignatures.indexOf(JSON.stringify(scene));
+const studySignature = (scene: SceneState) => JSON.stringify(scene, (key, value) => key === 'appearance' ? undefined : value);
+const presetSignatures = PRESETS.map(p => studySignature(p.scene));
+const matchingPreset = (scene: SceneState) => presetSignatures.indexOf(studySignature(scene));
 function initialStudy() {
   try { return { study: decodeStudy(window.location.hash) ?? freshStudy(), error: '', fit: !window.location.hash }; }
   catch (error) { return { study: freshStudy(), fit: true, error: error instanceof Error ? error.message : 'This share link could not be opened.' }; }
@@ -71,7 +73,8 @@ export default function App() {
   const [tool, setTool] = useState<Tool>('scale');
   const [locked, setLocked] = useState(initial.study.locked), [snap, setSnap] = useState(false);
   const [display, setDisplay] = useState<DisplayMode>(initial.study.display ?? 'solid');
-  const wireframe = display === 'wireframe';
+  const appearance = referenceAppearance(scene, display);
+  const wireframe = appearance.allWireframe;
   const [reveals, setReveals] = useState<Reveals>(initial.study.reveals);
   const [stage, setStage] = useState<number | null>(null);
   const [preset, setPreset] = useState(() => matchingPreset(scene));
@@ -91,7 +94,7 @@ export default function App() {
   const shareButton = useRef<HTMLButtonElement>(null);
   const sharing = useRef<ShareSync | null>(null), pauseSharing = useRef(!!initial.error);
   const readStudy = useRef<() => SharedStudy>(() => initial.study);
-  readStudy.current = () => ({ version: 3, display, scene: sceneRef.current,
+  readStudy.current = () => ({ version: 4, display, scene: sceneRef.current,
     camera: viewport.current?.getCameraState() ?? initial.study.camera, reveals, locked, focus });
   const syncUrl = useCallback((finished = false) => {
     if (pauseSharing.current) return;
@@ -200,14 +203,14 @@ export default function App() {
     const current = cloneScene(sceneRef.current);
     setFuture(values => [current, ...values]); setPast(past.slice(0, -1));
     edit(cloneScene(previous)); committed.current = cloneScene(previous);
-    const template = PRESETS.findIndex(p => JSON.stringify(p.scene) === JSON.stringify(previous)); setPreset(template);
+    const template = matchingPreset(previous); setPreset(template);
   }, [past, dragging, edit]);
   const redo = useCallback(() => {
     const next = future[0]; if (!next || dragging) return;
     const current = cloneScene(sceneRef.current);
     setPast(values => [...values, current]); setFuture(future.slice(1));
     edit(cloneScene(next)); committed.current = cloneScene(next);
-    const template = PRESETS.findIndex(p => JSON.stringify(p.scene) === JSON.stringify(next)); setPreset(template);
+    const template = matchingPreset(next); setPreset(template);
   }, [future, dragging, edit]);
 
   useEffect(() => {
@@ -273,8 +276,12 @@ export default function App() {
   }
   function addForm() {
     fitPending.current = true;
-    mutate(next => { setSelected(addShape(next, addKind)); }, true);
+    mutate(next => { const id = addShape(next, addKind); if (display === 'forms') getShape(next, id).appearance = 'wireframe'; setSelected(id); }, true);
     setPreset(-1); setCurveEditing(false); setCurvePoint(2); selectPanel('shape');
+  }
+  function changeFormAppearance(mode: FormAppearance) {
+    mutate(next => setFormAppearance(next, selected, mode, display), true);
+    setDisplay('forms');
   }
   function removeForm() {
     fitPending.current = true;
@@ -307,7 +314,7 @@ export default function App() {
   }
   function closeShareDialog() { setManualLink(null); shareButton.current?.focus(); }
   const volumePercent = metrics ? Math.round((metrics.overlapVolume / metrics.bodyVolume) * 100) : 0;
-  const statusMessage = error ? 'Geometry needs attention' : busy ? (displayQuality === 'preview' ? 'Live preview · refining detail…' : 'Updating geometry…') : !wireframe && metrics?.volume === 0 ? 'The result is empty — move or resize a shape.' : scene.operation !== 'single' && metrics && metrics.overlapVolume < .00001 ? 'No overlap with form A — move a form closer.' : 'Ready to study';
+  const statusMessage = error ? 'Geometry needs attention' : busy ? (displayQuality === 'preview' ? 'Live preview · refining detail…' : 'Updating geometry…') : display === 'solid' && metrics?.volume === 0 ? 'The result is empty — move or resize a shape.' : scene.operation !== 'single' && metrics && metrics.overlapVolume < .00001 ? 'No overlap with form A — move a form closer.' : 'Ready to study';
 
   const single = scene.operation === 'single';
   const curve = getShape(scene, selected).spine;
@@ -337,10 +344,16 @@ export default function App() {
     const label = { cutter: 'Other form outlines', construction: 'Cross-contours', hidden: 'Hidden lines', seam: 'Connection edges' }[key];
     return <button key={key} className={reveals[key] ? 'active' : ''} aria-pressed={reveals[key]} disabled={single && (key === 'cutter' || key === 'seam')} onClick={() => toggleReveal(key)}><span className="toggle-check">{reveals[key] && <Check size={13} strokeWidth={3} />}</span>{label}</button>;
   });
+  const formAppearanceControl = (location: Panel) => <section className="form-appearance" aria-label={`Form ${selected.toUpperCase()} appearance`}>
+    <div className="section-caption">FORM {selected.toUpperCase()} VIEW</div>
+    <div className="mode-tabs">{(['wireframe', 'solid'] as const).map(mode => <button key={mode} aria-label={`Form ${selected.toUpperCase()} ${mode}`} className={formAppearance(scene, selected, display) === mode ? 'active' : ''} aria-pressed={formAppearance(scene, selected, display) === mode} disabled={dragging} onClick={() => changeFormAppearance(mode)}>{mode === 'wireframe' ? 'Wireframe' : 'Solid'}</button>)}</div>
+    {location === 'shape' && <p className="parameter-tip">Shows the original form. All wireframe below the drawing removes every filled surface.</p>}
+  </section>;
   const formList = (location: Panel, editable = false) => <section className="form-list" aria-label="Forms in study">
     <div className="section-caption">FORMS IN YOUR STUDY<span>{forms.length} / {MAX_SHAPES}</span></div>
     <div className="shape-selector">{forms.map(([id, shape]) => <button key={id} className={selected === id ? 'active' : ''} onClick={() => { setSelected(id); setCurvePoint(2); }} disabled={locked || dragging} aria-pressed={selected === id}>
       <span className="form-letter">{id.toUpperCase()}</span><span>Form {id.toUpperCase()}<small>{shapeName(shape.kind)}</small></span></button>)}</div>
+    {location === 'shape' && formAppearanceControl(location)}
     {editable && <><div className="add-form-row"><label className="sr-only" htmlFor={`add-kind-${location}`}>Shape to add</label><div className="select-wrap"><select id={`add-kind-${location}`} value={addKind} onChange={event => setAddKind(event.target.value as ShapeKind)} disabled={locked || dragging || forms.length >= MAX_SHAPES}>{SHAPES.map(shape => <option key={shape.id} value={shape.id}>{shape.label}</option>)}</select><ChevronDown size={14} /></div><button className="secondary-button" disabled={locked || dragging || forms.length >= MAX_SHAPES} onClick={addForm}><Plus size={16} /> Add form</button></div>
       {forms.length >= MAX_SHAPES && <p className="parameter-tip">All six forms are in use. Remove a form to add another.</p>}
       {!single && <button className="text-button remove-form" disabled={locked || dragging} onClick={removeForm}><Trash2 size={14} /> Remove form {selected.toUpperCase()}</button>}</>}
@@ -369,7 +382,7 @@ export default function App() {
         <div className="canvas-container" ref={containerRef} />
         <div className="canvas-hint">{locked ? <><LockKeyhole size={14} /> Reference locked. Reveal lines as you draw.</> : editingCurve ? <>Tap a point · Drag its arrows or use the sliders</> : <><MousePointer2 size={14} /><span className="mouse-hint">Drag to orbit · Scroll to zoom · Right-drag to pan</span><span className="touch-hint">Drag to orbit · Pinch to zoom · Two fingers to pan</span></>}</div>
         {error && <div className="error-message" role="alert"><strong>Let’s recover this view.</strong><p>{error}</p><button onClick={() => { setError(''); setEngineRestart(value => value + 1); }}>Retry geometry</button><button onClick={() => applyPreset(0)}>Reset forms</button></div>}
-        <div className="reveal-bar" aria-label="Quick drawing guides"><button className={wireframe ? 'active' : ''} aria-pressed={wireframe} onClick={() => setDisplay(wireframe ? 'solid' : 'wireframe')}><span className="toggle-check">{wireframe && <Check size={13} strokeWidth={3} />}</span>Wireframe</button>{revealControls(single ? ['construction'] : ['seam'])}<button className="more-guides" aria-label="All drawing guides" title="All drawing guides" onClick={() => { setFocus(false); selectPanel('draw'); }}><Layers3 size={16} /><span>All guides</span></button></div>
+        <div className="reveal-bar" aria-label="Quick drawing guides"><button className={wireframe ? 'active' : ''} aria-pressed={wireframe} onClick={() => setDisplay(wireframe ? (display === 'wireframe' && forms.some(([, shape]) => shape.appearance === 'solid') ? 'forms' : 'solid') : 'wireframe')}><span className="toggle-check">{wireframe && <Check size={13} strokeWidth={3} />}</span>All wireframe</button>{revealControls(single ? ['construction'] : ['seam'])}<button className="more-guides" aria-label="All drawing guides" title="All drawing guides" onClick={() => { setFocus(false); selectPanel('draw'); }}><Layers3 size={16} /><span>All guides</span></button></div>
       </section>
       <aside className="inspector" aria-label="Study controls">
         <div className="inspector-navigation"><div className="workflow-tabs" role="tablist" aria-label="Study workflow">{PANELS.map((item, index) => <button key={item.id} id={`tab-${item.id}`} role="tab" aria-selected={panel === item.id} aria-controls={`panel-${item.id}`} tabIndex={panel === item.id ? 0 : -1} disabled={dragging} onClick={() => selectPanel(item.id)} onKeyDown={event => {
@@ -453,8 +466,8 @@ export default function App() {
           <section id="panel-draw" role="tabpanel" aria-labelledby="tab-draw" hidden={panel !== 'draw'}>
             <div className="panel-heading"><span className="eyebrow">04 / PUT PEN TO PAPER</span><h2>Look. Draw. Reveal.</h2><p>Draw what you see, then check the lines that explain the volume.</p></div>
             <section className="display-options" aria-label="Reference appearance"><h3>Reference view</h3>
-              <div className="mode-tabs">{(['solid', 'wireframe'] as const).map(mode => <button key={mode} className={display === mode ? 'active' : ''} aria-pressed={display === mode} onClick={() => setDisplay(mode)}>{mode === 'solid' ? 'Solid' : 'Wireframe'}</button>)}</div>
-              <p className="parameter-tip">{wireframe ? 'Only the edges of each original form. No filled faces or shading; front and back edges are equally visible.' : 'Shaded surfaces show the combined result. Reveal hidden edges to see through the solid.'}</p>
+              <div className="mode-tabs">{(['solid', 'forms', 'wireframe'] as const).map(mode => <button key={mode} className={display === mode ? 'active' : ''} aria-pressed={display === mode} onClick={() => setDisplay(mode)}>{mode === 'solid' ? 'Solid result' : mode === 'forms' ? 'Per form' : 'All wireframe'}</button>)}</div>
+              <p className="parameter-tip">{display === 'forms' ? 'Original forms with individual surfaces. Choose a form in Shape to change its view; connection lines follow the chosen operation.' : wireframe ? 'Only the edges of each original form. No filled faces or shading; front and back edges are equally visible.' : 'Shaded surfaces show the combined result. Reveal hidden edges to see through the solid.'}</p>
             </section>
         <div className="lesson-steps">{[
           ['Observe', single ? 'Draw the silhouette. Predict how a contour wraps around it.' : 'Draw the silhouette. Predict where the forms intersect.'],
@@ -464,7 +477,7 @@ export default function App() {
           <span className="step-number">0{index + 1}</span><span><strong>{title}</strong><small>{description}</small></span><ArrowRight className="step-arrow" size={14} />
         </button>)}</div>
 
-            <section className="drawing-guides" aria-label="Drawing guides"><h3>Choose what to reveal</h3><div className="guide-toggles">{revealControls(wireframe ? (single ? ['construction'] : ['construction', 'seam']) : (single ? ['construction', 'hidden'] : ['construction', 'hidden', 'cutter', 'seam']))}</div>
+            <section className="drawing-guides" aria-label="Drawing guides"><h3>Choose what to reveal</h3><div className="guide-toggles">{revealControls(wireframe ? (single ? ['construction'] : ['construction', 'seam']) : (single ? ['construction', 'hidden'] : ['construction', 'hidden', ...(display === 'solid' ? ['cutter' as const] : []), 'seam']))}</div>
         {!single && <p className="connection-hint">{reveals.seam ? 'Connection edges are shown in green. Turn them off to draw the connections yourself.' : 'Connection edges are hidden. Draw where the forms meet, then turn them on to check.'}</p>}
         <div className="contour-density"><Slider label="Cross-contour count" value={scene.contours} min={1} max={9} step={1} disabled={dragging} onChange={v => { mutate(next => { next.contours = Math.round(v); }); setReveals(value => ({ ...value, construction: true })); }} onCommit={checkpoint} /><p className="parameter-tip">Use fewer sections to practice placing each line with intent.</p></div>
 
@@ -477,7 +490,7 @@ export default function App() {
       </aside>
     </main>
     <footer className="status-bar"><span className={error ? 'status-error' : ''}><span className={`live-dot ${busy ? 'busy' : ''}`} />{statusMessage}</span><span className="geometry-stats">{metrics && !busy && !error ? `${single ? 'Single form' : `${volumePercent}% of A shared`} · ${Math.round(metrics.duration)} ms` : 'Form studies'}</span></footer>
-    {help && <div className="modal-backdrop" onClick={() => setHelp(false)}><section className="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={e => e.stopPropagation()}><button autoFocus className="icon-button close-dialog" aria-label="Close help" onClick={() => setHelp(false)}><X size={18} /></button><div className="eyebrow">A FEW SIMPLE CONTROLS</div><h2 id="help-title">Make yourself at home.</h2><p>Start in Study, adjust size and position in Shape, then bend or twist in Deform. Open Draw for step-by-step practice. Use Deform to twist, bend, taper, pinch, or morph the cross-section. Add up to six forms from Shape. Select a form to edit it, or remove it from the study. Switch to Wireframe for transparent forms with every edge visible. Cross-contours and connection edges can be revealed independently. Solid view also offers hidden-line reveals.</p><dl><dt>Orbit / zoom</dt><dd>Drag / scroll or pinch</dd><dt>Pan</dt><dd>Right-drag · two-finger drag</dd><dt>Move / rotate / size</dt><dd><kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd></dd><dt>Lock / unlock drawing view</dt><dd><kbd>Space</kbd></dd><dt>Reveal hidden lines (Solid view)</dt><dd><kbd>H</kbd></dd><dt>Undo / redo</dt><dd><kbd>⌘ / Ctrl</kbd> + <kbd>Z</kbd> / <kbd>Shift Z</kbd></dd></dl><p className="help-footnote">Use Start drawing to keep the reference still. Save image exports a clean view without the editing handles. The address keeps your current forms and view. Copy share link to reopen or share this study; undo history stays in this visit.</p><button className="primary-button" onClick={() => setHelp(false)}>Got it <ArrowRight size={15} /></button></section></div>}
+    {help && <div className="modal-backdrop" onClick={() => setHelp(false)}><section className="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={e => e.stopPropagation()}><button autoFocus className="icon-button close-dialog" aria-label="Close help" onClick={() => setHelp(false)}><X size={18} /></button><div className="eyebrow">A FEW SIMPLE CONTROLS</div><h2 id="help-title">Make yourself at home.</h2><p>Start in Study, adjust size and position in Shape, then bend or twist in Deform. Open Draw for step-by-step practice. Use Deform to twist, bend, taper, pinch, or morph the cross-section. Add up to six forms from Shape. Select a form to edit it, or remove it from the study. Use All wireframe for transparent forms with every edge visible. In Shape, choose Solid or Wireframe for the selected form. Per form shows the original shapes; Solid result shows the chosen cut or join. Cross-contours and connection edges can be revealed independently. Solid view also offers hidden-line reveals.</p><dl><dt>Orbit / zoom</dt><dd>Drag / scroll or pinch</dd><dt>Pan</dt><dd>Right-drag · two-finger drag</dd><dt>Move / rotate / size</dt><dd><kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd></dd><dt>Lock / unlock drawing view</dt><dd><kbd>Space</kbd></dd><dt>Reveal hidden lines (Solid view)</dt><dd><kbd>H</kbd></dd><dt>Undo / redo</dt><dd><kbd>⌘ / Ctrl</kbd> + <kbd>Z</kbd> / <kbd>Shift Z</kbd></dd></dl><p className="help-footnote">Use Start drawing to keep the reference still. Save image exports a clean view without the editing handles. The address keeps your current forms and view. Copy share link to reopen or share this study; undo history stays in this visit.</p><button className="primary-button" onClick={() => setHelp(false)}>Got it <ArrowRight size={15} /></button></section></div>}
     {manualLink && <div className="modal-backdrop" onClick={closeShareDialog}><section className="help-dialog share-dialog" role="dialog" aria-modal="true" aria-labelledby="share-title" onClick={e => e.stopPropagation()}><button className="icon-button close-dialog" aria-label="Close share link" onClick={closeShareDialog}><X size={18} /></button><div className="eyebrow">TAKE YOUR STUDY WITH YOU</div><h2 id="share-title">Copy your share link.</h2><p>Your browser couldn’t copy automatically. Select the link and copy it with ⌘/Ctrl+C.</p><label className="share-link-label">Share link<input autoFocus readOnly value={manualLink} onFocus={e => e.currentTarget.select()} /></label><button className="primary-button" onClick={closeShareDialog}>Done <Check size={15} /></button></section></div>}
     {exported && <div className="modal-backdrop" onClick={() => setExported(null)}><section className="image-dialog" role="dialog" aria-modal="true" aria-labelledby="export-title" onClick={e => e.stopPropagation()}><button autoFocus className="icon-button close-dialog" aria-label="Close image preview" onClick={() => setExported(null)}><X size={18} /></button><div className="eyebrow">YOUR DRAWING REFERENCE</div><h2 id="export-title">Take this study with you.</h2><img src={exported} alt="Exported study without editing handles" /><p>PNG · 2× resolution · current construction reveals</p><a className="primary-button" href={exported} download="form-lab-study.png"><ArrowDownToLine size={15} /> Download PNG</a></section></div>}
   </div>;

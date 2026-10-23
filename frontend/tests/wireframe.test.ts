@@ -28,6 +28,8 @@ describe('transparent form outlines', () => {
     const geometry = prepareRenderGeometry(evaluateScene(wasm, scene), scene, 'final');
     const lines = sourceEdgeLines(geometry.sourceEdges, camera);
     expect(lines.length / 6).toBe(24);
+    expect(sourceEdgeLines(geometry.sourceEdges, camera, ['b']).length / 6).toBe(12);
+    expect(sourceEdgeLines(geometry.sourceEdges, camera, ['f'])).toEqual([]);
     expect(packedEdgeLines(geometry.featureEdges, camera, true).seam.length).toBeGreaterThan(0);
     expect(packedEdgeLines(geometry.featureEdges, camera, false).seam).toEqual([]);
     expect(sourceEdgeLines(geometry.sourceEdges, camera)).toEqual(lines);

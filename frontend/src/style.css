@@ -131,6 +131,8 @@ fieldset { padding: 0; border: 0; margin: 0; min-width: 0; }
 .lesson-step strong { display: block; font-size: 13px; margin: 3px 0 6px; }
 .lesson-step small { display: block; font-size: 12px; line-height: 1.6; color: var(--muted); }
 .step-arrow { margin-left: auto; margin-top: 6px; }
+.form-appearance { margin: 16px 0; }
+.form-appearance .mode-tabs { margin: 8px 0; }
 .display-options { margin-bottom: 24px; }
 .display-options h3 { font-size: 13px; }
 .display-options .mode-tabs { margin: 12px 0; }

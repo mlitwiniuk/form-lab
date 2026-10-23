@@ -31,7 +31,7 @@ export function evaluateScene(wasm: ManifoldToplevel, scene: SceneState, quality
     const sources: ShapeMap<MeshData> = { a: empty, b: empty };
     const solids = shapeEntries(scene).map(([id, shape]) => {
       const source = create(shape);
-      sources[id] = readMesh(source);
+      sources[id] = readMesh(own(source.calculateNormals(0, 30)));
       return own(source.transform(shapeMatrix(shape).elements as Mat4));
     });
     const [a, ...others] = solids;
