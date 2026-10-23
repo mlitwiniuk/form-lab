@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { zlibSync } from 'fflate';
-import { cloneScene, generateRounded, PRESETS, type SceneState } from '../src/scene';
+import { addShape, cloneScene, generateRounded, PRESETS, type SceneState } from '../src/scene';
 import { decodeStudy, DEFAULT_CAMERA, encodeStudy, MAX_SHARE_BYTES, type SharedStudy } from '../src/share-state';
 
 const study = (scene: SceneState = PRESETS.find(p => p.name === 'S-curve')!.scene): SharedStudy => ({ version: 1, scene: cloneScene(scene),
@@ -34,12 +34,25 @@ describe('share link format', () => {
     original.camera = { position: [12.4, -7.8, 3.9], target: [2.5, 1.5, -.9] };
     expect(decodeStudy(encodeStudy(original))).toEqual(original);
   });
+  it.each(['solid', 'wireframe'] as const)('restores the %s view with all six forms and reveal preferences', display => {
+    const original: SharedStudy = { ...study(PRESETS[0].scene), version: 3, display };
+    for (let i = 0; i < 5; i++) addShape(original.scene, 'box');
+    expect(decodeStudy(encodeStudy(original))).toEqual(original);
+  });
+  it.each([1, 2] as const)('keeps legacy v%s links readable and upgrades them when a display mode is chosen', version => {
+    const original: SharedStudy = { ...study(), version };
+    expect(decodeStudy(encodeStudy(original))).toEqual(original);
+    expect(decodeStudy(encodeStudy({ ...original, display: 'wireframe' }))).toEqual({ ...original, version: 3, display: 'wireframe' });
+  });
+  it.each([undefined, null, 'transparent', 1, {}])('rejects missing or invalid v3 display modes (%#)', display => {
+    expect(() => decodeStudy(rawLink({ ...study(), version: 3, display }))).toThrow(/damaged/);
+  });
   it('accepts no snapshot as a fresh visit', () => { expect(decodeStudy('')).toBeNull(); expect(decodeStudy('#')).toBeNull(); });
   it.each(['#unrecognized', '#s=', '#s=++++', '#s=a', '#s=truncated', '#s=' + 'a'.repeat(12001)])('rejects malformed or oversized hashes (%#)', hash => {
     expect(() => decodeStudy(hash)).toThrow();
   });
   it('rejects future versions with a useful explanation', () => {
-    expect(() => decodeStudy(rawLink({ ...study(), version: 3 }))).toThrow(/newer or unsupported/);
+    expect(() => decodeStudy(rawLink({ ...study(), version: 4 }))).toThrow(/newer or unsupported/);
   });
   it('checks the checksum, even when the compressed content is otherwise valid', () => {
     const bytes = zlibSync(new TextEncoder().encode(JSON.stringify(study()))); bytes[bytes.length - 1] ^= 1;

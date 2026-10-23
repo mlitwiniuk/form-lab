@@ -7,6 +7,7 @@ export const MAX_SHAPES = SHAPE_IDS.length;
 export type ShapeMap<T> = Record<'a' | 'b', T> & Partial<Record<ShapeId, T>>;
 export type ShapeKind = 'box' | 'cylinder' | 'sphere' | 'cone' | 'rounded';
 export type Operation = 'single' | 'subtract' | 'union' | 'intersect' | 'reverse' | 'exclude';
+export type DisplayMode = 'solid' | 'wireframe';
 export type Tool = 'translate' | 'rotate' | 'scale';
 export interface Deformation { twist: number; bend: number; taper: number; bulge: number; roundness: number }
 /** Positions are in shape-relative units; radius is a local thickness multiplier. */

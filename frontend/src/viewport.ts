@@ -4,9 +4,9 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
-import { packedEdgeLines } from './edges';
+import { packedEdgeLines, sourceEdgeLines } from './edges';
 import type { RenderGeometry } from './render-geometry';
-import { SHAPE_IDS, shapeEntries, getShape, cloneScene, constrainBend, constrainCurvePoint, shapeMatrix, radians, type Reveals, type SceneState, type ShapeId, type ShapeMap, type Tool, type Vec3 } from './scene';
+import { SHAPE_IDS, shapeEntries, getShape, cloneScene, constrainBend, constrainCurvePoint, shapeMatrix, radians, type DisplayMode, type Reveals, type SceneState, type ShapeId, type ShapeMap, type Tool, type Vec3 } from './scene';
 import { constructionLines, createSectionSampler, type GeometryQuality } from './forms';
 import type { CameraState } from './share-state';
 
@@ -39,6 +39,7 @@ export class Viewport {
   private state!: SceneState;
   private selection: ShapeId = 'a';
   private sourceEdges: ShapeMap<Float32Array> = { a: new Float32Array(), b: new Float32Array() };
+  private display: DisplayMode = 'solid';
   private locked = false;
   private editingEnabled = false;
   private reveals: Reveals = { cutter: true, construction: false, hidden: false, seam: true };
@@ -172,7 +173,7 @@ export class Viewport {
     return { visible, hidden };
   }
 
-  private setLine(pair: LinePair, points: number[], show: boolean, hidden = this.reveals.hidden) {
+  private setLine(pair: LinePair, points: number[], show: boolean, hidden = this.display === 'solid' && this.reveals.hidden) {
     pair.visible.visible = show && points.length > 0;
     pair.hidden.visible = show && hidden && points.length > 0;
     if (!show || !points.length) return;
@@ -239,8 +240,11 @@ export class Viewport {
     this.guideDirty = true; this.dirty = true;
   }
 
-  setOptions(selection: ShapeId, tool: Tool, reveals: Reveals, locked: boolean, snap: boolean, editingEnabled = true) {
+  setOptions(selection: ShapeId, tool: Tool, reveals: Reveals, locked: boolean, snap: boolean, editingEnabled = true, display: DisplayMode = 'solid') {
     this.selection = shapeEntries(this.state).some(([id]) => id === selection) ? selection : 'a'; this.reveals = reveals; this.editingEnabled = editingEnabled;
+    this.display = display;
+    this.solid.visible = display === 'solid';
+    for (const pair of Object.values(this.lines)) pair.visible.material.depthTest = display === 'solid';
     if (locked && !this.locked) this.bookmark = { position: this.camera.position.clone(), target: this.orbit.target.clone() };
     this.locked = locked; this.orbit.enabled = !locked;
     this.currentTool = tool;
@@ -357,7 +361,8 @@ export class Viewport {
 
   private updateLines() {
     const edges = packedEdgeLines(this.featureEdges, this.camera.position, this.reveals.seam);
-    this.setLine(this.lines.contour, edges.contour, true);
+    const wireframe = this.display === 'wireframe';
+    this.setLine(this.lines.contour, wireframe ? sourceEdgeLines(this.sourceEdges, this.camera.position) : edges.contour, true);
     this.setLine(this.lines.seam, edges.seam, this.reveals.seam);
     if (!this.renderedScene) return;
     const study = this.renderedScene, entries = shapeEntries(study), single = entries.length === 1;
@@ -368,12 +373,12 @@ export class Viewport {
     }
     const a = this.guideCache.a ?? { sections: [], axis: [] };
     const others = entries.slice(1).map(([id]) => this.guideCache[id] ?? { sections: [], axis: [] });
-    this.setLine(this.lines.primaryGuide, this.reveals.construction && !single ? packedEdgeLines(this.sourceEdges.a, this.camera.position).contour : [], this.reveals.construction && !single);
-    const sourceOutlines = !single && this.reveals.cutter ? entries.slice(1).flatMap(([id]) => packedEdgeLines(this.sourceEdges[id] ?? new Float32Array(), this.camera.position).contour) : [];
-    this.setLine(this.lines.otherGuides, sourceOutlines, !single && this.reveals.cutter);
+    this.setLine(this.lines.primaryGuide, !wireframe && this.reveals.construction && !single ? packedEdgeLines(this.sourceEdges.a, this.camera.position).contour : [], !wireframe && this.reveals.construction && !single);
+    const sourceOutlines = !wireframe && !single && this.reveals.cutter ? entries.slice(1).flatMap(([id]) => packedEdgeLines(this.sourceEdges[id] ?? new Float32Array(), this.camera.position).contour) : [];
+    this.setLine(this.lines.otherGuides, sourceOutlines, !wireframe && !single && this.reveals.cutter);
     this.setLine(this.lines.crossA, a.sections, this.reveals.construction);
-    this.setLine(this.lines.crossOthers, others.flatMap(guide => guide.sections), this.reveals.construction && !single && this.reveals.cutter);
-    this.setLine(this.lines.axis, [...a.axis, ...(!single && this.reveals.cutter ? others.flatMap(guide => guide.axis) : [])], this.reveals.construction);
+    this.setLine(this.lines.crossOthers, others.flatMap(guide => guide.sections), this.reveals.construction && !single && (wireframe || this.reveals.cutter));
+    this.setLine(this.lines.axis, [...a.axis, ...(!single && (wireframe || this.reveals.cutter) ? others.flatMap(guide => guide.axis) : [])], this.reveals.construction);
   }
 
   private resize() {
@@ -407,6 +412,7 @@ export class Viewport {
   };
 
   exportImage() {
+    if (this.guideDirty) { this.updateLines(); this.guideDirty = false; }
     const helper = this.transform.getHelper(), previous = helper.visible;
     const curveVisible = this.curveLine.visible; this.curveLine.visible = false;
     helper.visible = false;

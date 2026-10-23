@@ -131,6 +131,9 @@ fieldset { padding: 0; border: 0; margin: 0; min-width: 0; }
 .lesson-step strong { display: block; font-size: 13px; margin: 3px 0 6px; }
 .lesson-step small { display: block; font-size: 12px; line-height: 1.6; color: var(--muted); }
 .step-arrow { margin-left: auto; margin-top: 6px; }
+.display-options { margin-bottom: 24px; }
+.display-options h3 { font-size: 13px; }
+.display-options .mode-tabs { margin: 12px 0; }
 .drawing-guides h3 { font-size: 13px; margin-bottom: 14px; }
 .guide-toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .guide-toggles button { justify-content: flex-start; padding: 10px 8px; }

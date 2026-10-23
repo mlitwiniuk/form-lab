@@ -1,5 +1,5 @@
 import { Vector3 } from 'three';
-import type { GeometryResult } from './scene';
+import type { GeometryResult, ShapeMap } from './scene';
 
 export interface FeatureEdge { a: Vector3; b: Vector3; normals: Vector3[]; origins: number[]; seam: boolean; crease: boolean }
 
@@ -76,4 +76,9 @@ export function packedEdgeLines(edges: Float32Array, camera: Vector3, showConnec
     i += 8 + count * 3;
   }
   return { contour, seam };
+}
+
+/** Complete original form outlines, including back edges, without triangle diagonals or Boolean cuts. */
+export function sourceEdgeLines(sources: ShapeMap<Float32Array>, camera: Vector3): number[] {
+  return Object.values(sources).flatMap(edges => packedEdgeLines(edges, camera).contour);
 }
