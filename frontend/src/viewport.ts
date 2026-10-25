@@ -6,6 +6,7 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { packedEdgeLines, sourceEdgeLines } from './edges';
 import { referenceAppearance } from './appearance';
+import { ConnectionOverlay } from './connection-overlay';
 import type { RenderGeometry } from './render-geometry';
 import { SHAPE_IDS, shapeEntries, getShape, cloneScene, constrainBend, constrainCurvePoint, shapeMatrix, radians, type DisplayMode, type Reveals, type SceneState, type ShapeId, type ShapeMap, type Tool, type Vec3 } from './scene';
 import { constructionLines, createSectionSampler, type GeometryQuality } from './forms';
@@ -24,6 +25,8 @@ export class Viewport {
   readonly renderer: THREE.WebGLRenderer;
   readonly camera = new THREE.PerspectiveCamera(34, 1, .05, 120);
   readonly world = new THREE.Scene();
+  private readonly editor = new THREE.Scene();
+  private connections: ConnectionOverlay;
   readonly orbit: OrbitControls;
   readonly transform: TransformControls;
   private solid: THREE.Mesh;
@@ -100,6 +103,7 @@ export class Viewport {
       crossA: this.makeLinePair('#517e71', 1.4),
       crossOthers: this.makeLinePair('#bc8062', 1.2),
     };
+    this.connections = new ConnectionOverlay(this.lines.seam);
     this.orbit = new OrbitControls(this.camera, this.renderer.domElement);
     this.orbit.enableDamping = false;
     this.orbit.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
@@ -114,8 +118,8 @@ export class Viewport {
     this.transform.setSize(.7);
     this.transform.setColors('#ba785e', '#80966e', '#7595a7', '#d0a56b');
     this.transform.setSpace('world');
-    this.world.add(this.transform.getHelper());
-    this.curveLine.renderOrder = 5; this.curveLine.visible = false; this.world.add(this.curveLine);
+    this.editor.add(this.transform.getHelper());
+    this.curveLine.renderOrder = 5; this.curveLine.visible = false; this.editor.add(this.curveLine);
     for (let i = 0; i < 7; i++) {
       const handle = new THREE.Object3D(); this.world.add(handle); this.curveHandles.push(handle);
       const button = document.createElement('button');
@@ -251,6 +255,7 @@ export class Viewport {
       surface.geometry.setAttribute('normal', new THREE.BufferAttribute(source.normals!, 3));
       surface.matrix.copy(shapeMatrix(shape)); surface.matrixWorldNeedsUpdate = true;
     }
+    this.connections.setForms(shapeEntries(scene).map(([id]) => this.formSurfaces[id]));
     this.featureEdges = result.featureEdges;
     this.connectionEdges = result.connectionEdges;
     this.sourceEdges = result.sourceEdges;
@@ -262,7 +267,7 @@ export class Viewport {
     this.display = display;
     this.lines.contour.visible.material.depthTest = true;
     this.lines.wireForms.visible.material.depthTest = false;
-    for (const key of ['seam', 'primaryGuide', 'otherGuides', 'crossA', 'crossOthers', 'axis'] as const) this.lines[key].visible.material.depthTest = display === 'solid';
+    for (const key of ['primaryGuide', 'otherGuides', 'crossA', 'crossOthers', 'axis'] as const) this.lines[key].visible.material.depthTest = display === 'solid';
     if (locked && !this.locked) this.bookmark = { position: this.camera.position.clone(), target: this.orbit.target.clone() };
     this.locked = locked; this.orbit.enabled = !locked;
     this.currentTool = tool;
@@ -389,7 +394,7 @@ export class Viewport {
     this.setLine(this.lines.wireForms, outlines(appearance.wireForms), originalForms, false);
     // Reveal exterior joins of all forms, never the operation-specific cavity edges.
     const connections = this.reveals.seam ? packedEdgeLines(this.connectionEdges, this.camera.position).seam : [];
-    this.setLine(this.lines.seam, connections, this.reveals.seam, appearance.result && this.reveals.hidden);
+    this.setLine(this.lines.seam, connections, this.reveals.seam, this.reveals.hidden);
     if (!this.renderedScene) return;
     const study = this.renderedScene, entries = shapeEntries(study), single = entries.length === 1;
     const key = JSON.stringify([entries, study.contours, this.quality]);
@@ -418,12 +423,22 @@ export class Viewport {
     this.guideDirty = true; this.dirty = true;
   }
 
+  private render() {
+    this.renderer.render(this.world, this.camera);
+    this.connections.render(this.renderer, this.camera, this.display !== 'solid');
+    // Editing handles stay above the reference, including its connection overlay.
+    const autoClear = this.renderer.autoClear;
+    this.renderer.autoClear = false;
+    try { this.renderer.render(this.editor, this.camera); }
+    finally { this.renderer.autoClear = autoClear; }
+  }
+
   private animate = () => {
     if (this.disposed) return;
     this.frame = requestAnimationFrame(this.animate);
     if (this.guideDirty) { this.updateLines(); this.guideDirty = false; }
     if (this.dirty) {
-      this.renderer.render(this.world, this.camera); this.dirty = false;
+      this.render(); this.dirty = false;
       this.positionCurveLabels();
       if (this.paintStartedAt !== null) {
         const elapsed = Math.round(performance.now() - this.paintStartedAt);
@@ -445,7 +460,7 @@ export class Viewport {
     const [width, height] = this.dimensions;
     this.renderer.setPixelRatio(2);
     this.renderer.setSize(width, height, false);
-    this.renderer.render(this.world, this.camera);
+    this.render();
     const url = this.renderer.domElement.toDataURL('image/png');
     helper.visible = previous;
     this.curveLine.visible = curveVisible;
@@ -456,7 +471,8 @@ export class Viewport {
   dispose() {
     this.disposed = true; cancelAnimationFrame(this.frame); this.observer.disconnect();
     this.onCleanup.forEach(fn => fn()); this.orbit.dispose(); this.transform.dispose();
-    this.world.traverse(object => {
+    this.connections.dispose();
+    for (const scene of [this.world, this.editor]) scene.traverse(object => {
       if (object instanceof THREE.Mesh || object instanceof THREE.Line) {
         object.geometry?.dispose();
         const materials = Array.isArray(object.material) ? object.material : [object.material];
