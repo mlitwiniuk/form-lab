@@ -1,6 +1,6 @@
 # Form Lab implementation plan
 
-Date: 23 October 2026. Status: the original prototype and the requested [form studies expansion](impl_form-studies.md) are implemented locally. The expansion brings bounded deformations, five shape families and initial rounded generation forward from phases 3–4. The [share-link milestone](impl_share-links.md) also persists the current study and view in a portable URL without a backend. Cloudflare deployment is deferred. Phase 2 Rust persistence, the remaining validation gates and the full exercise catalog remain planned.
+Date: 23 October 2026. Status: the original prototype and the requested [form studies expansion](impl_form-studies.md) are implemented locally. The expansion brings bounded deformations, five shape families and initial rounded generation forward from phases 3–4. The [share-link milestone](impl_share-links.md) also persists the current study and view in a portable URL without a backend. Cloudflare deployment is [configured for form-lab.app](impl_cloudflare-deployment.md) and awaits publication from the user’s own terminal. Phase 2 Rust persistence, the remaining validation gates and the full exercise catalog remain planned.
 
 The first release is complete only when guided practice, the shape editor, the generator, save/load and a verified self-hosted deployment work together. An isolated 3D demo is a milestone, not the requested product.
 

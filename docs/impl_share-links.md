@@ -1,6 +1,6 @@
 # Share links
 
-Date: 23 October 2026. Status: implemented locally; Cloudflare deployment remains deferred.
+Date: 23 October 2026. Status: implemented locally; Cloudflare deployment is prepared separately in the [deployment instructions](impl_cloudflare-deployment.md) and is not yet published.
 
 ## Behavior
 

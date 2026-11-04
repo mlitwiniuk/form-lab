@@ -47,6 +47,7 @@ fieldset { padding: 0; border: 0; margin: 0; min-width: 0; }
 .view-presets { display: flex; background: #fafbf6; border: 1px solid var(--line); border-radius: 9px; flex-shrink: 0; }
 .view-presets button { display: flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; border: 0; background: transparent; border-radius: 8px; padding: 8px; font-size: 12px; text-transform: capitalize; }
 .view-presets button:hover:not(:disabled) { background: var(--active); }
+.view-presets button[aria-pressed=true] { background: var(--active); color: var(--green); box-shadow: inset 0 0 0 1px #b8cfaf; }
 .canvas-container { position: relative; flex: 1; min-height: 0; touch-action: none; }
 .canvas-container canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 .canvas-hint { min-height: 30px; padding: 5px 12px; display: flex; justify-content: center; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); flex-shrink: 0; text-align: center; }
@@ -244,3 +245,9 @@ fieldset { padding: 0; border: 0; margin: 0; min-width: 0; }
 
 .reveal-bar .more-guides { min-width: 44px; flex-shrink: 0; }
 @media (max-width: 759px), (pointer: coarse) { .add-form-row select { font-size: 16px; } }
+
+.view-angle-controls { margin-bottom: 24px; border-block: 1px solid var(--line); }
+.view-angle-controls summary { min-height: 48px; padding: 14px 0; cursor: pointer; font-size: 13px; font-weight: 600; }
+.view-angle-controls summary span { float: right; font-size: 11px; font-weight: 400; color: var(--muted); }
+.view-angle-controls .level-view { width: 100%; margin-top: 12px; }
+.view-angle-controls .mode-tabs button { min-height: 44px; }

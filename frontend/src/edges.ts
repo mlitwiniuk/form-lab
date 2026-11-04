@@ -32,12 +32,12 @@ export function extractEdges(mesh: Pick<GeometryResult, 'positions' | 'indices' 
   return [...edges.values()];
 }
 
-export function edgeLines(edges: FeatureEdge[], camera: Vector3): { contour: number[]; seam: number[] } {
+export function edgeLines(edges: FeatureEdge[], camera: Vector3, toViewer?: Vector3): { contour: number[]; seam: number[] } {
   const contour: number[] = [], seam: number[] = [];
   const midpoint = new Vector3(), view = new Vector3();
   for (const edge of edges) {
     midpoint.addVectors(edge.a, edge.b).multiplyScalar(.5);
-    view.subVectors(camera, midpoint);
+    if (toViewer) view.copy(toViewer); else view.subVectors(camera, midpoint);
     const facing = edge.normals.map(n => n.dot(view));
     const silhouette = facing.some(v => v > 1e-7) && facing.some(v => v < -1e-7);
     if (edge.seam) seam.push(...edge.a.toArray(), ...edge.b.toArray());
@@ -60,12 +60,12 @@ export function packEdges(edges: FeatureEdge[]): Float32Array {
 }
 
 /** No vectors, strings, adjacency rebuilding, or per-edge arrays on the render thread. */
-export function packedEdgeLines(edges: Float32Array, camera: Vector3, showConnections = true): { contour: number[]; seam: number[] } {
+export function packedEdgeLines(edges: Float32Array, camera: Vector3, showConnections = true, toViewer?: Vector3): { contour: number[]; seam: number[] } {
   const contour: number[] = [], seam: number[] = [];
   for (let i = 0; i < edges.length;) {
-    const x = camera.x - (edges[i] + edges[i + 3]) / 2;
-    const y = camera.y - (edges[i + 1] + edges[i + 4]) / 2;
-    const z = camera.z - (edges[i + 2] + edges[i + 5]) / 2;
+    const x = toViewer?.x ?? camera.x - (edges[i] + edges[i + 3]) / 2;
+    const y = toViewer?.y ?? camera.y - (edges[i + 1] + edges[i + 4]) / 2;
+    const z = toViewer?.z ?? camera.z - (edges[i + 2] + edges[i + 5]) / 2;
     const flags = edges[i + 6], count = edges[i + 7];
     let front = false, back = false;
     for (let n = 0; n < count; n++) {
@@ -81,6 +81,6 @@ export function packedEdgeLines(edges: Float32Array, camera: Vector3, showConnec
 }
 
 /** Complete original form outlines, including back edges, without triangle diagonals or Boolean cuts. */
-export function sourceEdgeLines(sources: ShapeMap<Float32Array>, camera: Vector3, ids: readonly ShapeId[] = Object.keys(sources) as ShapeId[]): number[] {
-  return ids.flatMap(id => { const edges = sources[id]; return edges ? packedEdgeLines(edges, camera).contour : []; });
+export function sourceEdgeLines(sources: ShapeMap<Float32Array>, camera: Vector3, ids: readonly ShapeId[] = Object.keys(sources) as ShapeId[], toViewer?: Vector3): number[] {
+  return ids.flatMap(id => { const edges = sources[id]; return edges ? packedEdgeLines(edges, camera, true, toViewer).contour : []; });
 }

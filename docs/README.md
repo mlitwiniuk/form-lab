@@ -6,6 +6,8 @@ Types: `prd` = product requirements; `spec` = technical design; `plan` = impleme
 
 ## Fast Paths
 
+- Deploy to your Cloudflare account: [Cloudflare deployment](impl_cloudflare-deployment.md)
+
 - Share and reopen a study: [Share links](impl_share-links.md)
 
 - Run or assess the current prototype: [Form studies and verification](impl_form-studies.md)
@@ -20,6 +22,8 @@ Types: `prd` = product requirements; `spec` = technical design; `plan` = impleme
 - `prd` [Form Lab requirements](prd_form-lab.md): User goals, reference analysis, exercise design, scope, and measurable usability requirements.
 
 ## Engineering
+
+- `impl` [Cloudflare deployment](impl_cloudflare-deployment.md): Validated static-assets configuration for form-lab.app, terminal deployment, custom domain setup, verification and status.
 
 - `impl` [Share links](impl_share-links.md): Versioned compressed URL snapshots, restored forms and camera, clipboard fallback, validation, synchronization and verification.
 

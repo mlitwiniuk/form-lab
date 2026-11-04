@@ -1,6 +1,10 @@
-generated_at: "2026-10-23T12:30:19+00:00"
+generated_at: "2026-10-23T12:44:46+00:00"
 generated_from: "docs/README.md"
 fast_paths:
+- label: "Deploy to your Cloudflare account"
+  links:
+  - title: "Cloudflare deployment"
+    path: "docs/impl_cloudflare-deployment.md"
 - label: "Share and reopen a study"
   links:
   - title: "Share links"
@@ -35,6 +39,11 @@ docs:
   type: "prd"
   section: "Product"
   summary: "User goals, reference analysis, exercise design, scope, and measurable usability requirements."
+- path: "docs/impl_cloudflare-deployment.md"
+  title: "Cloudflare deployment"
+  type: "impl"
+  section: "Engineering"
+  summary: "Validated static-assets configuration for form-lab.app, terminal deployment, custom domain setup, verification and status."
 - path: "docs/impl_share-links.md"
   title: "Share links"
   type: "impl"

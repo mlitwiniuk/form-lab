@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { zlibSync } from 'fflate';
 import { addShape, cloneScene, generateRounded, PRESETS, type SceneState } from '../src/scene';
 import { decodeStudy, DEFAULT_CAMERA, encodeStudy, MAX_SHARE_BYTES, type SharedStudy } from '../src/share-state';
+import { StudyCamera } from '../src/study-camera';
 
 const study = (scene: SceneState = PRESETS.find(p => p.name === 'S-curve')!.scene): SharedStudy => ({ version: 1, scene: cloneScene(scene),
   camera: structuredClone(DEFAULT_CAMERA), reveals: { construction: true, hidden: true, cutter: false, seam: false },
@@ -12,6 +13,59 @@ function rawLink(value: unknown) {
 }
 
 describe('share link format', () => {
+  it.each(['turn', 'tilt'] as const)('restores the %s drag constraint together with a precise view angle', mode => {
+    const view = new StudyCamera(); view.setProjection('orthographic');
+    view.setAngle('turn', 75); view.setAngle('tilt', 0); view.orbitMode = mode;
+    const original: SharedStudy = { ...study(), version: 5, display: 'wireframe', camera: view.getState() };
+    const restored = decodeStudy(encodeStudy(original))!;
+    expect(restored).toEqual(original);
+    const camera = new StudyCamera(); camera.setState(restored.camera);
+    expect(camera.orbitMode).toBe(mode);
+    expect(camera.getAngles().turn).toBeCloseTo(75, 10); expect(camera.getAngles().tilt).toBeCloseTo(0, 10);
+  });
+  it('opens previous v5 links with unrestricted orbiting', () => {
+    const view = new StudyCamera(); view.orbitMode = 'turn';
+    const previous = decodeStudy(rawLink({ ...study(), version: 5, display: 'wireframe', camera: { ...DEFAULT_CAMERA, projection: 'orthographic', orthographicSpan: 10 } }))!;
+    view.setState(previous.camera); expect(view.orbitMode).toBe('free');
+    expect(view.getState().orbitMode).toBeUndefined();
+  });
+  it('upgrades a legacy camera when only an axis constraint is chosen', () => {
+    const original = study(); original.camera.orbitMode = 'turn';
+    const updated = decodeStudy(encodeStudy(original))!;
+    expect(updated.version).toBe(5);
+    expect(updated.camera).toEqual({ ...original.camera, projection: 'perspective' });
+  });
+  it.each([null, 'roll', false, 1, {}])('rejects malformed camera axis constraints (%#)', orbitMode => {
+    expect(() => decodeStudy(rawLink({ ...study(), version: 5, display: 'wireframe', camera: { ...DEFAULT_CAMERA, projection: 'perspective', orbitMode } }))).toThrow(/damaged/);
+  });
+  it.each(['perspective', 'orthographic'] as const)('restores v5 %s with all six appearances, zoom, and camera position', projection => {
+    const original = study(PRESETS[0].scene), view = new StudyCamera();
+    for (let i = 0; i < 5; i++) addShape(original.scene, 'box');
+    original.scene.a.appearance = 'wireframe'; original.scene.b.appearance = 'solid';
+    view.setProjection(projection);
+    if (projection === 'orthographic') { view.camera.zoom *= 1.3; view.camera.updateProjectionMatrix(); }
+    original.version = 5; original.display = 'forms'; original.camera = view.getState();
+    const restored = decodeStudy(encodeStudy(original))!;
+    expect(restored).toEqual(original);
+    const restoredView = new StudyCamera(); restoredView.resize(390, 600); restoredView.setState(restored.camera);
+    expect(restoredView.getState()).toEqual(original.camera);
+  });
+  it.each([1, 2, 3, 4] as const)('opens legacy v%s cameras in perspective and upgrades an orthographic edit', version => {
+    const original: SharedStudy = { ...study(), version, ...(version >= 3 ? { display: 'solid' } : {}) };
+    const decoded = decodeStudy(encodeStudy(original))!;
+    const view = new StudyCamera(); view.setProjection('orthographic'); view.setState(decoded.camera);
+    expect(view.projection).toBe('perspective');
+    view.setProjection('orthographic'); decoded.camera = view.getState();
+    const updated = decodeStudy(encodeStudy(decoded))!;
+    expect(updated.version).toBe(5); expect(updated.camera).toEqual(view.getState());
+  });
+  it.each([undefined, null, 0, -.1, 200.01, Infinity, '10'])('rejects missing or unsafe orthographic spans (%#)', orthographicSpan => {
+    expect(() => decodeStudy(rawLink({ ...study(), version: 5, display: 'wireframe',
+      camera: { ...DEFAULT_CAMERA, projection: 'orthographic', orthographicSpan } }))).toThrow(/damaged/);
+  });
+  it.each([undefined, null, 'parallel', 1, {}])('rejects missing or invalid v5 projections (%#)', projection => {
+    expect(() => decodeStudy(rawLink({ ...study(), version: 5, display: 'wireframe', camera: { ...DEFAULT_CAMERA, projection } }))).toThrow(/damaged/);
+  });
   it.each(PRESETS)('restores $name with its complete view', preset => {
     const original = study(preset.scene), link = encodeStudy(original);
     expect(link).toMatch(/^#s=[A-Za-z0-9_-]+$/);
@@ -52,7 +106,7 @@ describe('share link format', () => {
     expect(() => decodeStudy(hash)).toThrow();
   });
   it('rejects future versions with a useful explanation', () => {
-    expect(() => decodeStudy(rawLink({ ...study(), version: 5 }))).toThrow(/newer or unsupported/);
+    expect(() => decodeStudy(rawLink({ ...study(), version: 6 }))).toThrow(/newer or unsupported/);
   });
   it('checks the checksum, even when the compressed content is otherwise valid', () => {
     const bytes = zlibSync(new TextEncoder().encode(JSON.stringify(study()))); bytes[bytes.length - 1] ^= 1;

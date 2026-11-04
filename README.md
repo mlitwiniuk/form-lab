@@ -31,6 +31,21 @@ python3 -m http.server 8080 --bind 127.0.0.1 --directory frontend/dist
 
 The production build includes JavaScript, the geometry worker, and its WASM binary. It does not load assets from a CDN or require an external API. Open it through HTTP, not by double-clicking `index.html`.
 
+## Deploy to Cloudflare
+
+Deployment is configured for `form-lab.app` using Cloudflare Workers Static Assets. Run from your own terminal:
+
+```sh
+cd ~/Sites/rust/form-lab
+npm run setup
+npm run cloudflare:login
+npm run deploy
+```
+
+Sign in to the Cloudflare account containing `form-lab.app`. Wrangler uploads only the built frontend and attaches the configured custom domain, including DNS and HTTPS provisioning. `npm run deploy:check` builds and validates without publishing. The deployment has **not been run**; the user is handling Cloudflare authorization and publication independently.
+
+See [Cloudflare deployment](docs/impl_cloudflare-deployment.md) for account selection, verification and future updates.
+
 ## Try the prototype
 
 1. Start with **Rounded bean**, **Twisted box**, **Pinched form**, **Bent cone**, or **Ellipsoid**, or press **New rounded form** for a generated reference.

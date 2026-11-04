@@ -10,7 +10,7 @@ import { ConnectionOverlay } from './connection-overlay';
 import type { RenderGeometry } from './render-geometry';
 import { SHAPE_IDS, shapeEntries, getShape, cloneScene, constrainBend, constrainCurvePoint, shapeMatrix, radians, type DisplayMode, type Reveals, type SceneState, type ShapeId, type ShapeMap, type Tool, type Vec3 } from './scene';
 import { constructionLines, createSectionSampler, type GeometryQuality } from './forms';
-import type { CameraState } from './share-state';
+import { StudyCamera, MIN_CAMERA_DISTANCE, MAX_CAMERA_DISTANCE, type CameraState, type CameraView, type Projection, type OrbitMode, type ViewAngles } from './study-camera';
 
 type LinePair = { visible: LineSegments2; hidden: LineSegments2 };
 interface Callbacks {
@@ -23,7 +23,8 @@ const PAPER = '#f6f5f0';
 
 export class Viewport {
   readonly renderer: THREE.WebGLRenderer;
-  readonly camera = new THREE.PerspectiveCamera(34, 1, .05, 120);
+  private readonly view = new StudyCamera();
+  get camera() { return this.view.camera; }
   readonly world = new THREE.Scene();
   private readonly editor = new THREE.Scene();
   private connections: ConnectionOverlay;
@@ -57,7 +58,7 @@ export class Viewport {
   private disposed = false;
   private guideDirty = true;
   private dimensions = [1, 1];
-  private bookmark: { position: THREE.Vector3; target: THREE.Vector3 } | null = null;
+  private bookmark: CameraState | null = null;
   private suppressEvents = false;
   private curveEditing = false;
   private curvePoint = 2;
@@ -105,9 +106,11 @@ export class Viewport {
     };
     this.connections = new ConnectionOverlay(this.lines.seam);
     this.orbit = new OrbitControls(this.camera, this.renderer.domElement);
+    this.orbit.target = this.view.target;
     this.orbit.enableDamping = false;
     this.orbit.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
-    this.orbit.minDistance = 5; this.orbit.maxDistance = 45;
+    this.orbit.minDistance = MIN_CAMERA_DISTANCE; this.orbit.maxDistance = MAX_CAMERA_DISTANCE;
+    this.orbit.minZoom = this.view.minZoom; this.orbit.maxZoom = this.view.maxZoom;
     this.orbit.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
     this.orbit.addEventListener('change', () => {
       this.guideDirty = true; this.dirty = true; this.callbacks.view(false);
@@ -169,7 +172,7 @@ export class Viewport {
     this.renderer.domElement.addEventListener('pointerup', up);
     this.onCleanup.push(() => this.renderer.domElement.removeEventListener('pointerdown', down), () => this.renderer.domElement.removeEventListener('pointerup', up));
     this.observer = new ResizeObserver(() => this.resize()); this.observer.observe(container);
-    this.setView('perspective'); this.resize(); this.animate();
+    this.setView('3d'); this.resize(); this.animate();
   }
 
   private makeLinePair(color: string, width: number, dashed = false): LinePair {
@@ -268,7 +271,7 @@ export class Viewport {
     this.lines.contour.visible.material.depthTest = true;
     this.lines.wireForms.visible.material.depthTest = false;
     for (const key of ['primaryGuide', 'otherGuides', 'crossA', 'crossOthers', 'axis'] as const) this.lines[key].visible.material.depthTest = display === 'solid';
-    if (locked && !this.locked) this.bookmark = { position: this.camera.position.clone(), target: this.orbit.target.clone() };
+    if (locked && !this.locked) this.bookmark = this.getCameraState();
     this.locked = locked; this.orbit.enabled = !locked;
     this.currentTool = tool;
     this.transform.setTranslationSnap(snap ? .25 : null);
@@ -323,58 +326,66 @@ export class Viewport {
     });
   }
 
-  setView(view: 'perspective' | 'front' | 'side' | 'top') {
-    const positions = { perspective: [7.2, 5.5, 9.8], front: [0, 0, 16], side: [16, 0, 0], top: [0, 16, .001] };
-    this.camera.position.fromArray(positions[view]);
-    this.orbit.target.set(0, 0, 0); this.orbit.update();
-    this.guideDirty = true; this.dirty = true;
-    this.callbacks.view(true);
+  setViewAngle(axis: keyof ViewAngles, degrees: number) {
+    if (this.locked || this.transform.dragging) return;
+    this.view.setAngle(axis, degrees);
+    this.syncCamera(); this.callbacks.view(false);
+  }
+
+  setOrbitMode(mode: OrbitMode) {
+    if (this.locked || this.transform.dragging) return;
+    this.view.orbitMode = mode;
+    this.syncCamera(); this.callbacks.view(true);
+  }
+
+  levelView() {
+    if (this.locked || this.transform.dragging) return;
+    this.view.levelView();
+    this.syncCamera(); this.callbacks.view(true);
+  }
+
+  setProjection(projection: Projection) {
+    if (this.locked || this.transform.dragging) return;
+    this.view.setProjection(projection);
+    this.syncCamera(); this.callbacks.view(true);
+  }
+
+  setView(view: CameraView) {
+    if (this.locked) return;
+    this.view.setView(view);
+    this.syncCamera(); this.callbacks.view(true);
   }
 
   fitView() {
     if (this.locked || !this.state) return;
-    const bounds = new THREE.Box3();
-    for (const [id] of shapeEntries(this.state)) bounds.expandByObject(this.proxies[id], true);
-    if (bounds.isEmpty()) return;
-    const center = bounds.getCenter(new THREE.Vector3());
-    const direction = this.camera.position.clone().sub(this.orbit.target).normalize();
-    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
-    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion);
-    const verticalTangent = Math.tan(radians(this.camera.fov) / 2);
-    // Fit within the shorter dimension so rotating a device keeps the whole form visible.
-    const tangentY = verticalTangent * Math.min(1, this.camera.aspect), tangentX = tangentY;
-    const point = new THREE.Vector3();
-    let distance = this.orbit.minDistance;
-    // Fit the projected vertices, so foreshortened forms still fill a small screen.
-    for (const mesh of shapeEntries(this.state).map(([id]) => this.proxies[id])) {
+    const points: THREE.Vector3[] = [];
+    for (const [id] of shapeEntries(this.state)) {
+      const mesh = this.proxies[id]; mesh.updateWorldMatrix(true, false, true);
       const positions = mesh.geometry.getAttribute('position');
-      for (let i = 0; i < positions.count; i++) {
-        point.fromBufferAttribute(positions, i).applyMatrix4(mesh.matrixWorld).sub(center);
-        distance = Math.max(distance, point.dot(direction) + 1.2 * Math.max(Math.abs(point.dot(right)) / tangentX, Math.abs(point.dot(up)) / tangentY));
-      }
+      for (let i = 0; i < positions.count; i++) points.push(new THREE.Vector3().fromBufferAttribute(positions, i).applyMatrix4(mesh.matrixWorld));
     }
-    distance = Math.min(distance, this.orbit.maxDistance);
-    this.orbit.target.copy(center);
-    this.camera.position.copy(center).addScaledVector(direction, distance);
-    this.orbit.update(); this.guideDirty = this.dirty = true;
-    this.callbacks.view(true);
+    this.view.fit(points);
+    this.syncCamera(); this.callbacks.view(true);
   }
 
-  getCameraState(): CameraState {
-    return { position: this.camera.position.toArray(), target: this.orbit.target.toArray() };
-  }
+  getCameraState(): CameraState { return this.view.getState(); }
 
   setCameraState(view: CameraState) {
-    this.camera.position.fromArray(view.position); this.orbit.target.fromArray(view.target);
-    this.orbit.update();
-    this.bookmark = { position: this.camera.position.clone(), target: this.orbit.target.clone() };
-    this.guideDirty = this.dirty = true;
+    this.view.setState(view);
+    this.syncCamera();
+    this.bookmark = this.getCameraState();
+  }
+
+  private syncCamera() {
+    Object.assign(this.orbit, this.view.getOrbitLimits());
+    this.orbit.object = this.camera;
+    this.transform.camera = this.camera;
+    this.orbit.update(); this.guideDirty = this.dirty = true;
   }
 
   restoreView() {
-    if (!this.bookmark) { this.setView('perspective'); return; }
-    this.camera.position.copy(this.bookmark.position); this.orbit.target.copy(this.bookmark.target); this.orbit.update();
-    this.guideDirty = true; this.dirty = true;
+    if (!this.bookmark) { this.setView('3d'); return; }
+    this.setCameraState(this.bookmark);
     this.callbacks.view(true);
   }
 
@@ -384,16 +395,19 @@ export class Viewport {
 
   private updateLines() {
     // Keep the result silhouette independent of the all-form connection reveal.
-    const edges = packedEdgeLines(this.featureEdges, this.camera.position, false);
+    // Orthographic rays share one direction, including on off-center curved forms.
+    const toViewer = this.view.projection === 'orthographic' ? this.camera.getWorldDirection(new THREE.Vector3()).negate() : undefined;
+    const edgeLines = (edges: Float32Array, showConnections = true) => packedEdgeLines(edges, this.camera.position, showConnections, toViewer);
+    const edges = edgeLines(this.featureEdges, false);
     if (!this.state) return;
     const appearance = referenceAppearance(this.state, this.display), originalForms = !appearance.result;
-    const outlines = (ids: ShapeId[]) => sourceEdgeLines(this.sourceEdges, this.camera.position, ids);
+    const outlines = (ids: ShapeId[]) => sourceEdgeLines(this.sourceEdges, this.camera.position, ids, toViewer);
     this.solid.visible = appearance.result;
     for (const id of SHAPE_IDS) this.formSurfaces[id].visible = appearance.solidForms.includes(id);
     this.setLine(this.lines.contour, appearance.result ? edges.contour : outlines(appearance.solidForms), true);
     this.setLine(this.lines.wireForms, outlines(appearance.wireForms), originalForms, false);
     // Reveal exterior joins of all forms, never the operation-specific cavity edges.
-    const connections = this.reveals.seam ? packedEdgeLines(this.connectionEdges, this.camera.position).seam : [];
+    const connections = this.reveals.seam ? edgeLines(this.connectionEdges).seam : [];
     this.setLine(this.lines.seam, connections, this.reveals.seam, this.reveals.hidden);
     if (!this.renderedScene) return;
     const study = this.renderedScene, entries = shapeEntries(study), single = entries.length === 1;
@@ -404,8 +418,8 @@ export class Viewport {
     }
     const a = this.guideCache.a ?? { sections: [], axis: [] };
     const others = entries.slice(1).map(([id]) => this.guideCache[id] ?? { sections: [], axis: [] });
-    this.setLine(this.lines.primaryGuide, !originalForms && this.reveals.construction && !single ? packedEdgeLines(this.sourceEdges.a, this.camera.position).contour : [], !originalForms && this.reveals.construction && !single);
-    const sourceOutlines = !originalForms && !single && this.reveals.cutter ? entries.slice(1).flatMap(([id]) => packedEdgeLines(this.sourceEdges[id] ?? new Float32Array(), this.camera.position).contour) : [];
+    this.setLine(this.lines.primaryGuide, !originalForms && this.reveals.construction && !single ? edgeLines(this.sourceEdges.a).contour : [], !originalForms && this.reveals.construction && !single);
+    const sourceOutlines = !originalForms && !single && this.reveals.cutter ? entries.slice(1).flatMap(([id]) => edgeLines(this.sourceEdges[id] ?? new Float32Array()).contour) : [];
     this.setLine(this.lines.otherGuides, sourceOutlines, !originalForms && !single && this.reveals.cutter);
     this.setLine(this.lines.crossA, a.sections, this.reveals.construction);
     this.setLine(this.lines.crossOthers, others.flatMap(guide => guide.sections), this.reveals.construction && !single && (originalForms || this.reveals.cutter));
@@ -415,10 +429,7 @@ export class Viewport {
   private resize() {
     const width = Math.max(1, this.container.clientWidth), height = Math.max(1, this.container.clientHeight);
     this.dimensions = [width, height]; this.renderer.setSize(width, height);
-    this.camera.aspect = width / height;
-    // Keep the complete study framed even in a tall, narrow browser panel.
-    this.camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(radians(34) / 2) / Math.min(1, this.camera.aspect)));
-    this.camera.updateProjectionMatrix();
+    this.view.resize(width, height);
     for (const pair of Object.values(this.lines)) for (const line of [pair.visible, pair.hidden]) line.material.resolution.set(width, height);
     this.guideDirty = true; this.dirty = true;
   }

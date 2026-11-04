@@ -2,7 +2,7 @@
 
 Date: 23 October 2026. Status: recommended design; geometry and performance choices require prototyping.
 
-The current browser-only prototype also supports [versioned share-link snapshots](impl_share-links.md). These encode forms and view in the URL fragment and need no Rust service or database. The backend below remains the future plan for named libraries, accounts and revision storage. Cloudflare deployment is a separate follow-up.
+The current browser-only prototype also supports [versioned share-link snapshots](impl_share-links.md). These encode forms and view in the URL fragment and need no Rust service or database. The backend below remains the future plan for named libraries, accounts and revision storage. Static Cloudflare deployment is [configured separately](impl_cloudflare-deployment.md) and awaits the user’s terminal deployment.
 
 ## Recommended stack and boundary
 

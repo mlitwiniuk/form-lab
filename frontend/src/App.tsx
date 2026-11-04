@@ -7,6 +7,7 @@ import { GeometryPipeline } from './geometry-pipeline';
 import { curveFromShape, type GeometryQuality } from './forms';
 import { decodeStudy, DEFAULT_CAMERA, encodeStudy, type SharedStudy } from './share-state';
 import { ShareSync } from './share-sync';
+import { viewAngles, type Projection, type OrbitMode, type ViewAngles } from './study-camera';
 
 const OPERATIONS: { id: Operation; label: string; symbol: string; description: string }[] = [
   { id: 'single', label: 'Single form', symbol: '○', description: 'Study and deform form A on its own' },
@@ -20,8 +21,8 @@ const PANELS = [{ id: 'study', label: 'Study' }, { id: 'shape', label: 'Shape' }
 type Panel = typeof PANELS[number]['id'];
 
 const INITIAL_REVEALS: Reveals = { cutter: true, construction: true, hidden: false, seam: true };
-const freshStudy = (): SharedStudy => ({ version: 4, display: 'wireframe', scene: cloneScene(DEFAULT_SCENE),
-  camera: structuredClone(DEFAULT_CAMERA), reveals: { ...INITIAL_REVEALS, construction: false, seam: false }, locked: false, focus: false });
+const freshStudy = (): SharedStudy => ({ version: 5, display: 'wireframe', scene: cloneScene(DEFAULT_SCENE),
+  camera: { ...structuredClone(DEFAULT_CAMERA), projection: 'perspective' }, reveals: { ...INITIAL_REVEALS, construction: false, seam: false }, locked: false, focus: false });
 const studySignature = (scene: SceneState) => JSON.stringify(scene, (key, value) => key === 'appearance' ? undefined : value);
 const presetSignatures = PRESETS.map(p => studySignature(p.scene));
 const matchingPreset = (scene: SceneState) => presetSignatures.indexOf(studySignature(scene));
@@ -73,6 +74,9 @@ export default function App() {
   const [tool, setTool] = useState<Tool>('scale');
   const [locked, setLocked] = useState(initial.study.locked), [snap, setSnap] = useState(false);
   const [display, setDisplay] = useState<DisplayMode>(initial.study.display ?? 'solid');
+  const [projection, setProjection] = useState<Projection>(initial.study.camera.projection ?? 'perspective');
+  const [angles, setAngles] = useState(() => viewAngles(initial.study.camera));
+  const [orbitMode, setOrbitMode] = useState<OrbitMode>(initial.study.camera.orbitMode ?? 'free');
   const appearance = referenceAppearance(scene, display);
   const wireframe = appearance.allWireframe;
   const [reveals, setReveals] = useState<Reveals>(initial.study.reveals);
@@ -94,8 +98,8 @@ export default function App() {
   const shareButton = useRef<HTMLButtonElement>(null);
   const sharing = useRef<ShareSync | null>(null), pauseSharing = useRef(!!initial.error);
   const readStudy = useRef<() => SharedStudy>(() => initial.study);
-  readStudy.current = () => ({ version: 4, display, scene: sceneRef.current,
-    camera: viewport.current?.getCameraState() ?? initial.study.camera, reveals, locked, focus });
+  readStudy.current = () => ({ version: 5, display, scene: sceneRef.current,
+    camera: viewport.current?.getCameraState() ?? { ...initial.study.camera, projection: initial.study.camera.projection ?? 'perspective' }, reveals, locked, focus });
   const syncUrl = useCallback((finished = false) => {
     if (pauseSharing.current) return;
     try { if (finished) sharing.current?.flush(); else sharing.current?.schedule(); }
@@ -119,7 +123,15 @@ export default function App() {
         edit: next => callbacks.current.edit(next), commit: () => callbacks.current.commit(),
         select: id => callbacks.current.select(id), drag: active => callbacks.current.drag(active),
         point: index => callbacks.current.point(index),
-        view: finished => syncUrl(finished),
+        view: finished => {
+          const view = viewport.current?.getCameraState();
+          if (view) {
+            setProjection(view.projection ?? 'perspective');
+            // Refresh the readouts at gesture end without rerendering every form control during orbit.
+            if (finished) { setAngles(viewAngles(view)); setOrbitMode(view.orbitMode ?? 'free'); }
+          }
+          syncUrl(finished);
+        },
       });
       viewport.current.setScene(sceneRef.current);
       viewport.current.setCameraState(initial.study.camera);
@@ -141,6 +153,8 @@ export default function App() {
         sceneRef.current = next.scene; setScene(next.scene);
         committed.current = cloneScene(next.scene); generatedStudy.current = cloneScene(next.scene);
         setPast([]); setFuture([]); setPreset(matchingPreset(next.scene));
+        setProjection(next.camera.projection ?? 'perspective');
+        setAngles(viewAngles(next.camera)); setOrbitMode(next.camera.orbitMode ?? 'free');
         setDisplay(next.display ?? 'solid'); setReveals(next.reveals); setLocked(next.locked); setFocus(next.focus); setStage(null);
         setSelected('a'); setCurveEditing(false); setCurvePoint(2); setTool('scale'); setSnap(false);
         setPanel(next.locked ? 'draw' : 'study'); setControlsCollapsed(false);
@@ -251,20 +265,26 @@ export default function App() {
     window.addEventListener('keydown', keydown); return () => window.removeEventListener('keydown', keydown);
   }, [locked, undo, redo, help, exported, manualLink]);
 
+  function changeViewAngle(axis: keyof ViewAngles, degrees: number) {
+    viewport.current?.setViewAngle(axis, degrees);
+    const view = viewport.current?.getCameraState();
+    if (view) setAngles(viewAngles(view));
+  }
+
   function mutate(change: (next: SceneState) => void, commit = false) {
     const next = cloneScene(sceneRef.current); change(next); shapeEntries(next, true).forEach(([, shape]) => constrainBend(shape)); edit(next); if (commit) checkpoint();
   }
   function applyPreset(index: number) {
     fitPending.current = true;
     setPreset(index); generatedStudy.current = cloneScene(PRESETS[index].scene); edit(cloneScene(PRESETS[index].scene)); checkpoint();
-    setSelected('a'); setLocked(false); setStage(null); setReveals({ ...INITIAL_REVEALS, construction: PRESETS[index].group !== 'Basics' }); viewport.current?.setView('perspective');
+    setSelected('a'); setLocked(false); setStage(null); setReveals({ ...INITIAL_REVEALS, construction: PRESETS[index].group !== 'Basics' }); viewport.current?.setView('3d');
     setCurveEditing(false); setCurvePoint(2);
   }
   function newRounded() {
     fitPending.current = true;
     setPreset(-1); setSelected('a'); setStage(null); setCurveEditing(false); setCurvePoint(2); setReveals(INITIAL_REVEALS);
     const next = generateRounded(); generatedStudy.current = cloneScene(next);
-    edit(next); checkpoint(); viewport.current?.setView('perspective');
+    edit(next); checkpoint(); viewport.current?.setView('3d');
   }
   function setKind(kind: ShapeKind) {
     setCurveEditing(false);
@@ -377,10 +397,10 @@ export default function App() {
           <div className="view-actions"><button className="icon-button" disabled={!past.length || dragging || locked} onClick={undo} title="Undo (⌘/Ctrl Z)" aria-label="Undo"><Undo2 size={18} /></button><button className="icon-button" disabled={!future.length || dragging || locked} onClick={redo} title="Redo (⌘/Ctrl Shift Z)" aria-label="Redo"><Redo2 size={18} /></button><button className="icon-button" onClick={() => setHelp(true)} aria-label="Open controls help" title="Controls & shortcuts"><HelpCircle size={18} /></button><button className="icon-button focus-button" onClick={() => setFocus(!focus)} aria-label={focus ? 'Exit focus mode' : 'Focus mode'} title={focus ? 'Show controls' : 'Hide controls'}>{focus ? <X size={18} /> : <Maximize2 size={18} />}</button></div>
         </div>
         <div className="camera-row"><span className="canvas-caption">{single ? shapeName(scene.a.kind) : `${forms.length} forms · ${OPERATIONS.find(item => item.id === scene.operation)?.label}`}</span>
-          <div className="view-presets" aria-label="Camera views">{(['perspective', 'front', 'side', 'top'] as const).map(view => <button key={view} disabled={locked} onClick={() => viewport.current?.setView(view)}>{view === 'perspective' ? '3D' : view}</button>)}<button disabled={locked} title="Fit forms to view" aria-label="Fit forms to view" onClick={() => viewport.current?.fitView()}><Focus size={17} /></button></div>
+          <div className="view-presets" aria-label="Camera views"><button disabled={locked || dragging} aria-label="Orthographic projection" aria-pressed={projection === 'orthographic'} title="Orthographic projection: parallel lines stay parallel" onClick={() => viewport.current?.setProjection(projection === 'orthographic' ? 'perspective' : 'orthographic')}>Ortho</button>{(['3d', 'front', 'side', 'top'] as const).map(view => <button key={view} disabled={locked} onClick={() => viewport.current?.setView(view)}>{view === '3d' ? '3D' : view}</button>)}<button disabled={locked} title="Fit forms to view" aria-label="Fit forms to view" onClick={() => viewport.current?.fitView()}><Focus size={17} /></button></div>
         </div>
         <div className="canvas-container" ref={containerRef} />
-        <div className="canvas-hint">{locked ? <><LockKeyhole size={14} /> Reference locked. Reveal lines as you draw.</> : editingCurve ? <>Tap a point · Drag its arrows or use the sliders</> : <><MousePointer2 size={14} /><span className="mouse-hint">Drag to orbit · Scroll to zoom · Right-drag to pan</span><span className="touch-hint">Drag to orbit · Pinch to zoom · Two fingers to pan</span></>}</div>
+        <div className="canvas-hint">{locked ? <><LockKeyhole size={14} /> Reference locked. Reveal lines as you draw.</> : editingCurve ? <>Tap a point · Drag its arrows or use the sliders</> : <><MousePointer2 size={14} /><span className="mouse-hint">{orbitMode === 'turn' ? 'Drag to turn' : orbitMode === 'tilt' ? 'Drag to tilt' : 'Drag to orbit'} · Scroll to zoom · Right-drag to pan</span><span className="touch-hint">{orbitMode === 'turn' ? 'Drag to turn' : orbitMode === 'tilt' ? 'Drag to tilt' : 'Drag to orbit'} · Pinch to zoom · Two fingers to pan</span></>}</div>
         {error && <div className="error-message" role="alert"><strong>Let’s recover this view.</strong><p>{error}</p><button onClick={() => { setError(''); setEngineRestart(value => value + 1); }}>Retry geometry</button><button onClick={() => applyPreset(0)}>Reset forms</button></div>}
         <div className="reveal-bar" aria-label="Quick drawing guides"><button className={wireframe ? 'active' : ''} aria-pressed={wireframe} onClick={() => setDisplay(wireframe ? (display === 'wireframe' && forms.some(([, shape]) => shape.appearance === 'solid') ? 'forms' : 'solid') : 'wireframe')}><span className="toggle-check">{wireframe && <Check size={13} strokeWidth={3} />}</span>All wireframe</button>{revealControls(single ? ['construction'] : ['seam'])}<button className="more-guides" aria-label="All drawing guides" title="All drawing guides" onClick={() => { setFocus(false); selectPanel('draw'); }}><Layers3 size={16} /><span>All guides</span></button></div>
       </section>
@@ -465,6 +485,16 @@ export default function App() {
           </section>
           <section id="panel-draw" role="tabpanel" aria-labelledby="tab-draw" hidden={panel !== 'draw'}>
             <div className="panel-heading"><span className="eyebrow">04 / PUT PEN TO PAPER</span><h2>Look. Draw. Reveal.</h2><p>Draw what you see, then check the lines that explain the volume.</p></div>
+            <details className="view-angle-controls">
+              <summary>View angle <span>{Math.round(angles.turn)}° turn · {Math.round(angles.tilt)}° tilt</span></summary>
+              <p className="parameter-tip">Turn the whole study left or right, or tilt it up or down. Each control changes one angle.</p>
+              <Slider label="Turn" value={angles.turn} min={-180} max={180} step={.1} suffix="°" disabled={locked || dragging} onChange={value => changeViewAngle('turn', value)} onCommit={() => syncUrl(true)} />
+              <Slider label="Tilt" value={angles.tilt} min={-90} max={90} step={.1} suffix="°" disabled={locked || dragging} onChange={value => changeViewAngle('tilt', value)} onCommit={() => syncUrl(true)} />
+              <h3>Drag to rotate</h3>
+              <div className="mode-tabs" role="group" aria-label="View rotation axis">{(['free', 'turn', 'tilt'] as const).map(mode => <button key={mode} disabled={locked || dragging} className={orbitMode === mode ? 'active' : ''} aria-pressed={orbitMode === mode} onClick={() => viewport.current?.setOrbitMode(mode)}>{mode === 'free' ? 'Free' : mode === 'turn' ? 'Turn only' : 'Tilt only'}</button>)}</div>
+              <button className="secondary-button level-view" disabled={locked || dragging} onClick={() => viewport.current?.levelView()}>Level view</button>
+              <p className="parameter-tip">Level view sets Tilt to 0° and enables Turn only. Start from Side and adjust Turn for a shallow angle.</p>
+            </details>
             <section className="display-options" aria-label="Reference appearance"><h3>Reference view</h3>
               <div className="mode-tabs">{(['solid', 'forms', 'wireframe'] as const).map(mode => <button key={mode} className={display === mode ? 'active' : ''} aria-pressed={display === mode} onClick={() => setDisplay(mode)}>{mode === 'solid' ? 'Solid result' : mode === 'forms' ? 'Per form' : 'All wireframe'}</button>)}</div>
               <p className="parameter-tip">{display === 'forms' ? 'Original forms with individual surfaces. Choose a form in Shape to change its view; connection lines mark exposed joins across all forms.' : wireframe ? (single ? 'Only the outlines of the form. All edges stay visible, with no filled faces or shading.' : 'Full form outlines stay visible. Turn on Hidden lines to show covered connections as faint dashes.') : 'Shaded surfaces show the combined result. Reveal hidden edges to see through the solid.'}</p>
@@ -490,7 +520,7 @@ export default function App() {
       </aside>
     </main>
     <footer className="status-bar"><span className={error ? 'status-error' : ''}><span className={`live-dot ${busy ? 'busy' : ''}`} />{statusMessage}</span><span className="geometry-stats">{metrics && !busy && !error ? `${single ? 'Single form' : `${volumePercent}% of A shared`} · ${Math.round(metrics.duration)} ms` : 'Form studies'}</span></footer>
-    {help && <div className="modal-backdrop" onClick={() => setHelp(false)}><section className="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={e => e.stopPropagation()}><button autoFocus className="icon-button close-dialog" aria-label="Close help" onClick={() => setHelp(false)}><X size={18} /></button><div className="eyebrow">A FEW SIMPLE CONTROLS</div><h2 id="help-title">Make yourself at home.</h2><p>Start in Study, adjust size and position in Shape, then bend or twist in Deform. Open Draw for step-by-step practice. Use Deform to twist, bend, taper, pinch, or morph the cross-section. Add up to six forms from Shape. Select a form to edit it, or remove it from the study. Use All wireframe for transparent forms with every edge visible. In Shape, choose Solid or Wireframe for the selected form. Per form shows the original shapes; Solid result shows the chosen cut or join. Cross-contours and connection edges can be revealed independently. Connection edges cover all forms and omit seams buried inside another form. Turn on Hidden lines to reveal covered connections as faint dashes in any view.</p><dl><dt>Orbit / zoom</dt><dd>Drag / scroll or pinch</dd><dt>Pan</dt><dd>Right-drag · two-finger drag</dd><dt>Move / rotate / size</dt><dd><kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd></dd><dt>Lock / unlock drawing view</dt><dd><kbd>Space</kbd></dd><dt>Reveal hidden lines</dt><dd><kbd>H</kbd></dd><dt>Undo / redo</dt><dd><kbd>⌘ / Ctrl</kbd> + <kbd>Z</kbd> / <kbd>Shift Z</kbd></dd></dl><p className="help-footnote">Use Start drawing to keep the reference still. Save image exports a clean view without the editing handles. The address keeps your current forms and view. Copy share link to reopen or share this study; undo history stays in this visit.</p><button className="primary-button" onClick={() => setHelp(false)}>Got it <ArrowRight size={15} /></button></section></div>}
+    {help && <div className="modal-backdrop" onClick={() => setHelp(false)}><section className="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={e => e.stopPropagation()}><button autoFocus className="icon-button close-dialog" aria-label="Close help" onClick={() => setHelp(false)}><X size={18} /></button><div className="eyebrow">A FEW SIMPLE CONTROLS</div><h2 id="help-title">Make yourself at home.</h2><p>Start in Study, adjust size and position in Shape, then bend or twist in Deform. Open Draw for step-by-step practice. Use Deform to twist, bend, taper, pinch, or morph the cross-section. Add up to six forms from Shape. Select a form to edit it, or remove it from the study. Use Ortho beside the camera views to keep parallel lines parallel. Turn it off for perspective. Orbit, zoom, and front/side/top views work in either projection. In Draw, open View angle for separate Turn and Tilt controls. Turn only or Tilt only limits dragging to one axis; Free restores normal orbiting. Level view keeps the reference upright while you turn it. Use All wireframe for transparent forms with every edge visible. In Shape, choose Solid or Wireframe for the selected form. Per form shows the original shapes; Solid result shows the chosen cut or join. Cross-contours and connection edges can be revealed independently. Connection edges cover all forms and omit seams buried inside another form. Turn on Hidden lines to reveal covered connections as faint dashes in any view.</p><dl><dt>Orbit / zoom</dt><dd>Drag / scroll or pinch</dd><dt>Pan</dt><dd>Right-drag · two-finger drag</dd><dt>Move / rotate / size</dt><dd><kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd></dd><dt>Lock / unlock drawing view</dt><dd><kbd>Space</kbd></dd><dt>Reveal hidden lines</dt><dd><kbd>H</kbd></dd><dt>Undo / redo</dt><dd><kbd>⌘ / Ctrl</kbd> + <kbd>Z</kbd> / <kbd>Shift Z</kbd></dd></dl><p className="help-footnote">Use Start drawing to keep the reference still. Save image exports a clean view without the editing handles. The address keeps your current forms and view. Copy share link to reopen or share this study; undo history stays in this visit.</p><button className="primary-button" onClick={() => setHelp(false)}>Got it <ArrowRight size={15} /></button></section></div>}
     {manualLink && <div className="modal-backdrop" onClick={closeShareDialog}><section className="help-dialog share-dialog" role="dialog" aria-modal="true" aria-labelledby="share-title" onClick={e => e.stopPropagation()}><button className="icon-button close-dialog" aria-label="Close share link" onClick={closeShareDialog}><X size={18} /></button><div className="eyebrow">TAKE YOUR STUDY WITH YOU</div><h2 id="share-title">Copy your share link.</h2><p>Your browser couldn’t copy automatically. Select the link and copy it with ⌘/Ctrl+C.</p><label className="share-link-label">Share link<input autoFocus readOnly value={manualLink} onFocus={e => e.currentTarget.select()} /></label><button className="primary-button" onClick={closeShareDialog}>Done <Check size={15} /></button></section></div>}
     {exported && <div className="modal-backdrop" onClick={() => setExported(null)}><section className="image-dialog" role="dialog" aria-modal="true" aria-labelledby="export-title" onClick={e => e.stopPropagation()}><button autoFocus className="icon-button close-dialog" aria-label="Close image preview" onClick={() => setExported(null)}><X size={18} /></button><div className="eyebrow">YOUR DRAWING REFERENCE</div><h2 id="export-title">Take this study with you.</h2><img src={exported} alt="Exported study without editing handles" /><p>PNG · 2× resolution · current construction reveals</p><a className="primary-button" href={exported} download="form-lab-study.png"><ArrowDownToLine size={15} /> Download PNG</a></section></div>}
   </div>;
