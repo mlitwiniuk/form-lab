@@ -4,27 +4,27 @@ The `/sketchfab/` page embeds public, embeddable Sketchfab models. Paste a model
 
 Copy link records the model ID, projection, camera position, target and actual field of view in the URL. Links require the model to remain available and embeddable on Sketchfab. Rotation presets follow each model's coordinate axes. Some models may need manual framing. Shared links do not include account credentials or private saved-library data.
 
-The optional Rust service stores user accounts, sessions and named model views and form-study configurations in SQLite. It does not download or cache model geometry or textures: an internet connection and Sketchfab availability are required. Signing in synchronizes the saved list when all devices use the same server. Users can save, reopen, overwrite and remove named views. See [Accounts and saved references](impl_saved-references.md) for the shared flow and migration behavior. Models saved in the earlier separate hosted viewer are not automatically imported. Password changes are available; no email password recovery, account deletion, scheduled backups, or account administration UI is implemented.
+The optional Rust service stores user accounts, sessions and named model views and form-study configurations in SQLite. It does not download or cache model geometry or textures: an internet connection and Sketchfab availability are required. Signing in synchronizes the saved list when all devices use the same server. Users can save, reopen, overwrite and remove named views. See [Accounts and saved references](impl_saved-references.md) for the shared flow and migration behavior. Models saved in the earlier separate hosted viewer are not automatically imported. Password changes and email recovery are available; no account deletion, scheduled backups, or account administration UI is implemented.
 
 ## Run locally
 
 ```sh
 npm run setup
 npm run build
-FORM_LAB_SIGNUP_KEY='a-long-random-local-setup-key' cargo run --manifest-path server/Cargo.toml
+FORM_LAB_MAIL_TRANSPORT=file FORM_LAB_MAIL_FROM=no-reply@example.test FORM_LAB_MAIL_DIRECTORY="$PWD/.local-mail" cargo run --manifest-path server/Cargo.toml
 ```
 
-Open `http://127.0.0.1:3000/sketchfab/`. Create an account with the setup key, then sign in on each device. The default database is `form-lab.sqlite3` in the working directory. Keep it and its WAL files out of version control. For frontend development, start `npm run dev` with the server also running and set `FORM_LAB_ORIGIN=http://127.0.0.1:5173` for the server; Vite proxies `/api` to port 3000. Origin must match the browser address exactly.
+Open `http://127.0.0.1:3000/sketchfab/`. Request a signup email and open its captured link from `.local-mail` to choose a password, then sign in on each device. The default database is `form-lab.sqlite3` in the working directory. Keep it and its WAL files out of version control. For frontend development, start `npm run dev` with the server also running and set `FORM_LAB_ORIGIN=http://127.0.0.1:5173` for the server; Vite proxies `/api` to port 3000. Origin must match the browser address exactly.
 
 ## Self-host with Docker
 
-1. Copy `.env.example` to `.env`, set `FORM_LAB_ORIGIN` to the exact browser-facing HTTPS origin without a trailing slash, and set a long random `FORM_LAB_SIGNUP_KEY`. Keep `.env` secret and outside version control.
+1. Copy `.env.example` to `.env`, set `FORM_LAB_ORIGIN` to the exact browser-facing HTTPS origin without a trailing slash, and configure Mailgun API or SMTP delivery as described in [Email accounts](impl_email-accounts.md). Keep `.env` secret and outside version control.
 2. Run `docker compose up -d --build`. The service listens on host loopback port 3000 and stores SQLite under the `form-lab-data` named volume.
 3. Put an HTTPS reverse proxy in front of `127.0.0.1:3000` for that domain. Do not expose plain HTTP or change the binding to a public interface. Configure the proxy to rate-limit authentication and limit requests. This initial service has only process-local global and per-username authentication throttling; it is not a substitute for edge rate limiting.
-4. Open the viewer, create your account using the setup key, then remove `FORM_LAB_SIGNUP_KEY` from `.env` and run `docker compose up -d`. This disables additional registration. Sign in with the same account on your devices.
+4. Open the viewer and create your account using the emailed verification link. Sign in with the same email on your devices. To close registration later, set `FORM_LAB_REGISTRATION_ENABLED=false` and restart the service; recovery remains available.
 5. Back up the named volume consistently while the service is stopped, or use SQLite's online backup API. Protect the backup and test restoration before relying on it. Database access gives access to stored model lists and password hashes.
 
-Session tokens are random, stored hashed, expire after 30 days, and use HttpOnly, SameSite=Strict and (for HTTPS origins) Secure cookies with the __Host- prefix. Passwords use Argon2. State-changing API calls check the request Origin. Signup requires a server-configured key of at least 16 characters; when absent, registration is disabled. This is a new, small self-hosted account implementation and has not had an independent security audit. Do not deploy without reviewing your exposure and backup arrangements.
+Session tokens are random, stored hashed, expire after 30 days, and use HttpOnly, SameSite=Strict and (for HTTPS origins) Secure cookies with the __Host- prefix. Passwords use Argon2. State-changing API calls check the request Origin. Signup verifies email ownership before password creation and requires configured email delivery. Public registration is controlled by `FORM_LAB_REGISTRATION_ENABLED`, with no signup key. This is a new, small self-hosted account implementation and has not had an independent security audit. Do not deploy without reviewing your exposure and backup arrangements.
 
 ## Verification
 
@@ -48,7 +48,7 @@ export KAMAL_REGISTRY_USERNAME=your-github-user
 export FORM_LAB_ARCH=amd64 # use arm64 for an ARM homelab host
 ```
 
-Supply `KAMAL_REGISTRY_PASSWORD` (a GHCR credential allowed to push/pull this image) and an initial `FORM_LAB_SIGNUP_KEY` through your password manager or shell environment. `.kamal/secrets` contains references only. It does not load Compose's `.env`. Use a long random signup key, then export `FORM_LAB_SIGNUP_KEY=''` after creating accounts and redeploy to disable registration. Avoid printing secrets through `kamal secrets print` or shell tracing.
+Supply `KAMAL_REGISTRY_PASSWORD` and the chosen email transport's credentials through your password manager or shell environment. `.kamal/secrets` contains references only; it does not load Compose's `.env`. See [Mailgun API / SMTP configuration](impl_email-accounts.md). To close public registration, export `FORM_LAB_REGISTRATION_ENABLED=false` and redeploy. Avoid printing secrets through `kamal secrets print` or shell tracing.
 
 `kamal config` validates configuration locally without connecting to your homelab. Kamal normally builds the committed Git revision: review and commit this work in your terminal before deployment, or it will omit the uncommitted implementation. No commit, push, setup, server access or deployment was performed during this review. Once you authorize hosting in your terminal, `kamal setup` handles the initial deployment and `kamal deploy` handles later releases.
 

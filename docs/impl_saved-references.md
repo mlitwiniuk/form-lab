@@ -4,11 +4,11 @@ Form studies (`/`) and the Sketchfab viewer (`/sketchfab/`) use the same React h
 
 ## Account flow
 
-Use **Sign in** in either header. If registration is enabled, the dialog has separate **Sign in** and **Create account** modes. Creating an account requires a username, password and confirmation, plus the host's account creation key. Both password fields must match; passwords require at least 12 characters. A successful registration signs in immediately. Choosing Save or Library while signed out opens authentication, then resumes the requested action. When registration is disabled, existing users can still sign in.
+Use **Sign in** in either header. If registration and email delivery are enabled, **Create account** asks for an email address and sends a verification link. Follow it, choose and confirm a password of at least 12 characters, and finish creating the account. No invitation key is required. Signing in afterward uses the email; existing username accounts remain compatible and can add a verified email in the account dialog. **Forgot your password?** sends a reset link. See [Email accounts and delivery](impl_email-accounts.md) for the full flow, Mailgun/SMTP settings, token safety and local capture. Choosing Save or Library while signed out resumes the requested action after sign-in.
 
 The account button shows the username after sign-in. It opens password-change and sign-out controls. Password changes require the current password and matching new passwords, revoke all existing sessions, and issue a fresh session for the current browser. Password verification and session insertion guard against an old password verification finishing after a concurrent password change. Signing out normally affects only the current device. Other tabs recheck account state when focused; expired sessions request sign-in again. Network/static-hosting errors have an explicit unavailable state.
 
-There is no email-based password recovery, account deletion, or administrator UI. The sign-in dialog states the recovery limit and directs users to the host. This remains a self-hosted account implementation without an independent security audit.
+Email recovery is available for verified addresses. Account deletion and an administrator recovery UI are not implemented. This remains a self-hosted account implementation without an independent security audit.
 
 ## Save, overwrite and reopen
 

@@ -12,3 +12,6 @@ server/target/
 *.sqlite3
 *.sqlite3-shm
 *.sqlite3-wal
+
+.local-mail/
+**/*.eml

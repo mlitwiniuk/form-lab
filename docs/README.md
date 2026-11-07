@@ -6,6 +6,8 @@ Types: `prd` = product requirements; `spec` = technical design; `plan` = impleme
 
 ## Fast Paths
 
+- Configure signup, recovery and Mailgun/SMTP: [Email accounts](impl_email-accounts.md)
+
 - Save, reopen or overwrite references: [Accounts and saved references](impl_saved-references.md)
 
 - Run the Sketchfab viewer and synced library: [Sketchfab viewer](impl_sketchfab-viewer.md)
@@ -26,6 +28,8 @@ Types: `prd` = product requirements; `spec` = technical design; `plan` = impleme
 - `prd` [Form Lab requirements](prd_form-lab.md): User goals, reference analysis, exercise design, scope, and measurable usability requirements.
 
 ## Engineering
+
+- `impl` [Email accounts](impl_email-accounts.md): Verified email signup, password recovery, legacy account linking, configurable Mailgun API/SMTP TLS, local capture and verification limits.
 
 - `impl` [Accounts and saved references](impl_saved-references.md): Shared account flow and styling, saved study/model settings, revision-protected overwrites, migrations and local acceptance checks.
 

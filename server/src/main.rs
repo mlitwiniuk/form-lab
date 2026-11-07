@@ -22,7 +22,8 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use subtle::ConstantTimeEq;
+mod email_accounts;
+mod mail;
 use tokio::sync::Semaphore;
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -30,7 +31,8 @@ use tower_http::services::{ServeDir, ServeFile};
 struct App {
     db: Arc<Mutex<Connection>>,
     origin: String,
-    signup: Option<String>,
+    registration: bool,
+    mailer: mail::Mailer,
     secure: bool,
     attempts: Arc<Mutex<HashMap<String, Vec<Instant>>>>,
     auth_slots: Arc<Semaphore>,
@@ -138,12 +140,16 @@ fn guarded_session(app: &App, user_id: i64, password_hash: Option<&str>) -> ApiR
 }
 #[derive(Deserialize)]
 struct Credentials {
-    username: String,
-    password: String,
     #[serde(default)]
-    signup_key: String,
+    username: String,
+    #[serde(default)]
+    email: String,
+    password: String,
 }
 fn throttle(app: &App, name: &str) -> ApiResult<()> {
+    throttle_limit(app, name, 8)
+}
+fn throttle_limit(app: &App, name: &str, limit: usize) -> ApiResult<()> {
     let mut attempts = app.attempts.lock().map_err(db_error)?;
     attempts.retain(|_, times| {
         times.retain(|t| t.elapsed() < Duration::from_secs(600));
@@ -155,7 +161,7 @@ fn throttle(app: &App, name: &str) -> ApiResult<()> {
             "Too many attempts. Try again later.",
         ));
     }
-    // A global budget also covers guessed usernames and invalid signup keys.
+    // A global budget also covers guessed usernames and email-link requests.
     let global = attempts.entry(String::new()).or_default();
     global.retain(|t| t.elapsed() < Duration::from_secs(60));
     if global.len() >= 60 {
@@ -166,7 +172,7 @@ fn throttle(app: &App, name: &str) -> ApiResult<()> {
     }
     global.push(Instant::now());
     let times = attempts.entry(name.to_string()).or_default();
-    if times.len() >= 8 {
+    if times.len() >= limit {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
             "Too many attempts. Try again later.",
@@ -175,65 +181,22 @@ fn throttle(app: &App, name: &str) -> ApiResult<()> {
     times.push(Instant::now());
     Ok(())
 }
-async fn register(
-    State(app): State<App>,
-    headers: HeaderMap,
-    Json(c): Json<Credentials>,
-) -> ApiResult<Response> {
-    same_origin(&app, &headers)?;
-    let name = username(&c.username)?;
-    throttle(&app, &name)?;
-    let expected = app
-        .signup
-        .as_ref()
-        .ok_or((StatusCode::FORBIDDEN, "Account creation is disabled."))?;
-    if digest(&c.signup_key)
-        .as_bytes()
-        .ct_eq(digest(expected).as_bytes())
-        .unwrap_u8()
-        != 1
-    {
-        return Err((StatusCode::FORBIDDEN, "Invalid account creation key."));
-    }
-    if c.password.chars().count() < 12 || c.password.len() > 1024 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "Use a password of at least 12 characters.",
-        ));
-    }
-    let permit = app.auth_slots.clone().try_acquire_owned().map_err(|_| {
-        (
-            StatusCode::TOO_MANY_REQUESTS,
-            "Authentication busy. Try again later.",
-        )
-    })?;
-    let hash = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        Argon2::default()
-            .hash_password(c.password.as_bytes(), &SaltString::generate(&mut OsRng))
-            .map(|s| s.to_string())
-            .map_err(db_error)
-    })
-    .await
-    .map_err(db_error)??;
-    let id = {
-        let db = app.db.lock().map_err(db_error)?;
-        db.execute(
-            "INSERT INTO users(username,password_hash) VALUES(?,?)",
-            params![name, hash],
-        )
-        .map_err(|_| (StatusCode::CONFLICT, "Could not create this account."))?;
-        db.last_insert_rowid()
-    };
-    guarded_session(&app, id, Some(&hash))
-}
 async fn login(
     State(app): State<App>,
     headers: HeaderMap,
     Json(c): Json<Credentials>,
 ) -> ApiResult<Response> {
     same_origin(&app, &headers)?;
-    let name = username(&c.username)?;
+    let identity = if c.email.is_empty() {
+        c.username.as_str()
+    } else {
+        c.email.as_str()
+    };
+    let name = if identity.contains('@') {
+        email_accounts::address(identity)?
+    } else {
+        username(identity)?
+    };
     throttle(&app, &name)?;
     if c.password.len() > 1024 {
         return Err(UNAUTHORIZED);
@@ -241,7 +204,7 @@ async fn login(
     let user: Option<(i64, String)> = {
         let db = app.db.lock().map_err(db_error)?;
         db.query_row(
-            "SELECT id,password_hash FROM users WHERE username=?",
+            "SELECT id,password_hash FROM users WHERE username=?1 OR (email=?1 AND email_verified_at IS NOT NULL)",
             [&name],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -302,10 +265,12 @@ async fn logout(State(app): State<App>, headers: HeaderMap) -> ApiResult<Respons
 async fn me(State(app): State<App>, headers: HeaderMap) -> ApiResult<Json<serde_json::Value>> {
     let id = session_user(&app, &headers)?;
     let db = app.db.lock().map_err(db_error)?;
-    let name: String = db
-        .query_row("SELECT username FROM users WHERE id=?", [id], |r| r.get(0))
+    let (name, email): (String, Option<String>) = db
+        .query_row("SELECT username,email FROM users WHERE id=?", [id], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
         .map_err(db_error)?;
-    Ok(Json(serde_json::json!({"username":name})))
+    Ok(Json(serde_json::json!({"username":name,"email":email})))
 }
 #[derive(Serialize)]
 struct Model {
@@ -589,7 +554,9 @@ fn migrate_configurations(db: &mut Connection) -> rusqlite::Result<()> {
     tx.commit()
 }
 async fn account_options(State(app): State<App>) -> Json<serde_json::Value> {
-    Json(serde_json::json!({"signup_enabled":app.signup.is_some()}))
+    Json(
+        serde_json::json!({"signup_enabled":app.registration && app.mailer.enabled(),"email_enabled":app.mailer.enabled()}),
+    )
 }
 #[derive(Deserialize)]
 struct PasswordChange {
@@ -658,6 +625,8 @@ async fn change_password(
                 "Password changed in another session. Sign in again.",
             ));
         }
+        tx.execute("DELETE FROM email_tokens WHERE user_id=?", [user])
+            .map_err(db_error)?;
         tx.execute("DELETE FROM sessions WHERE user_id=?", [user])
             .map_err(db_error)?;
         tx.commit().map_err(db_error)?;
@@ -771,12 +740,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     db.busy_timeout(Duration::from_secs(5))?;
     db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,username TEXT NOT NULL UNIQUE,password_hash TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,expires_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS models(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,uid TEXT NOT NULL,title TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(user_id,uid)); CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);")?;
     migrate_configurations(&mut db)?;
+    email_accounts::migrate(&mut db)?;
+    let mailer =
+        mail::Mailer::from_env(&origin).map_err(|e| std::io::Error::other(e.to_string()))?;
     let app = App {
         db: Arc::new(Mutex::new(db)),
         origin,
-        signup: env::var("FORM_LAB_SIGNUP_KEY")
-            .ok()
-            .filter(|s| s.len() >= 16),
+        registration: match env::var("FORM_LAB_REGISTRATION_ENABLED")
+            .unwrap_or_else(|_| "true".into())
+            .as_str()
+        {
+            "true" => true,
+            "false" => false,
+            _ => return Err("FORM_LAB_REGISTRATION_ENABLED must be true or false".into()),
+        },
+        mailer,
         secure,
         attempts: Arc::new(Mutex::new(HashMap::new())),
         auth_slots: Arc::new(Semaphore::new(2)),
@@ -791,7 +769,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .append_index_html_on_directories(true)
         .not_found_service(ServeFile::new(assets.join("index.html")));
     let api = Router::new()
-        .route("/register", post(register))
+        .route("/register", post(email_accounts::register))
+        .route(
+            "/register/complete",
+            post(email_accounts::finish_registration),
+        )
+        .route("/recovery", post(email_accounts::recover))
+        .route("/recovery/complete", post(email_accounts::finish_reset))
+        .route("/email", post(email_accounts::request_email))
+        .route("/email/complete", post(email_accounts::finish_email))
         .route("/login", post(login))
         .route("/logout", post(logout))
         .route("/me", get(me))
@@ -849,7 +835,8 @@ mod tests {
         let app = App {
             db: Arc::new(Mutex::new(db)),
             origin: "http://127.0.0.1:3000".into(),
-            signup: None,
+            registration: false,
+            mailer: mail::Mailer::disabled(),
             secure: false,
             attempts: Arc::new(Mutex::new(HashMap::new())),
             auth_slots: Arc::new(Semaphore::new(2)),

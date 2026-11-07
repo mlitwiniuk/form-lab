@@ -3,8 +3,12 @@
 import http.cookiejar
 import json
 import os
+import re
+import urllib.parse
 import socket
 import sqlite3
+import ssl
+import threading
 import subprocess
 import tempfile
 import time
@@ -18,9 +22,8 @@ with socket.socket() as sock:
     sock.bind(('127.0.0.1', 0))
     port = sock.getsockname()[1]
 origin = f'http://127.0.0.1:{port}'
-key = 'integration-signup-secret-123'
 with tempfile.TemporaryDirectory() as tmp:
-    env = dict(os.environ, FORM_LAB_BIND=f'127.0.0.1:{port}', FORM_LAB_ORIGIN=origin, FORM_LAB_SIGNUP_KEY=key, FORM_LAB_DATABASE=f'{tmp}/db.sqlite3', FORM_LAB_ASSETS=str(ROOT / 'frontend/dist'))
+    env = dict(os.environ, FORM_LAB_BIND=f'127.0.0.1:{port}', FORM_LAB_ORIGIN=origin, FORM_LAB_REGISTRATION_ENABLED='true', FORM_LAB_MAIL_TRANSPORT='file', FORM_LAB_MAIL_FROM='Form Lab <no-reply@example.test>', FORM_LAB_MAIL_DIRECTORY=f'{tmp}/mail', FORM_LAB_DATABASE=f'{tmp}/db.sqlite3', FORM_LAB_ASSETS=str(ROOT / 'frontend/dist'))
     def launch():
         proc = subprocess.Popen([str(BINARY)], cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         for _ in range(100):
@@ -45,15 +48,37 @@ with tempfile.TemporaryDirectory() as tmp:
                 return response.status, json.loads(content) if content else None
         except urllib.error.HTTPError as e:
             return e.code, e.read().decode()
+    def mail_token(email, purpose, after=None):
+        for _ in range(100):
+            files=sorted(Path(f'{tmp}/mail').glob('*.eml'),key=lambda p:p.stat().st_mtime_ns,reverse=True)
+            for path in files:
+                if after is not None and path.name in after: continue
+                content=path.read_text()
+                if f'To: {email}\n' not in content: continue
+                match=re.search(r'#account='+purpose+r'&token=([a-f0-9]{64})',content)
+                if match: return match.group(1)
+            time.sleep(.03)
+        raise AssertionError(f'no captured {purpose} email')
+    def seen_mail(): return {p.name for p in Path(f'{tmp}/mail').glob('*.eml')}
+    def register(opener,name):
+        email=f'{name}@example.test'
+        assert call(opener,'/api/register','POST',{'email':email})[0] == 202
+        assert call(opener,'/api/me')[0] == 401
+        raw=mail_token(email,'signup')
+        with sqlite3.connect(env['FORM_LAB_DATABASE']) as db:
+            assert db.execute('SELECT COUNT(*) FROM users WHERE email=?',[email]).fetchone()[0] == 0
+            assert raw not in [r[0] for r in db.execute('SELECT token_hash FROM email_tokens')]
+        body={'token':raw,'new_password':'very-long-password-123'}
+        assert call(opener,'/api/register/complete','POST',body)[0] == 200
+        assert call(opener,'/api/register/complete','POST',body)[0] == 400
+        assert call(opener,'/api/me')[1]['email'] == email
     proc = launch()
     try:
         with urllib.request.urlopen(origin+'/sketchfab/') as response:
             assert b'Sketchfab sketch reference' in response.read()
         a, b = client(), client()
-        cred = lambda n: {'username':n, 'password':'very-long-password-123', 'signup_key':key}
-        assert call(a, '/api/register', 'POST', {**cred('alice'), 'signup_key':'wrong'})[0] == 403
-        assert call(a, '/api/register', 'POST', cred('alice'))[0] == 200
-        assert call(b, '/api/register', 'POST', cred('bobby'))[0] == 200
+        cred = lambda n: {'email':f'{n}@example.test', 'password':'very-long-password-123'}
+        register(a,'alice'); register(b,'bobby')
         with a.open(origin+'/api/me') as response:
             assert response.headers['Cache-Control'] == 'no-store'
             assert response.headers['Vary'] == 'Cookie'
@@ -96,7 +121,7 @@ with tempfile.TemporaryDirectory() as tmp:
         assert call(a, '/api/login', 'POST', cred('alice'))[0] == 200
         # The library supports distinct named settings for both tools, not one row per UID.
         assert call(client(), '/api/configurations')[0] == 401
-        assert call(a, '/api/account-options')[1] == {'signup_enabled':True}
+        assert call(a, '/api/account-options')[1] == {'signup_enabled':True,'email_enabled':True}
         shape={'kind':'box','size':[3,3,3],'position':[0,0,0],'rotation':[0,0,0],'deform':{'twist':0,'bend':0,'taper':0,'bulge':0,'roundness':0}}
         study={'version':5,'display':'wireframe','scene':{'a':shape,'b':shape,'operation':'single','contours':4},'camera':{'position':[10,10,10],'target':[0,0,0],'projection':'orthographic','orthographicSpan':12,'orbitMode':'turn'},'reveals':{'construction':True,'hidden':False,'cutter':False,'seam':False},'locked':True,'focus':False}
         model={'version':1,'uid':'abcd1234','projection':'wide','fov':85,'position':[12,-24,18],'target':[1,2,3],'step':15,'locked':True}
@@ -124,6 +149,68 @@ with tempfile.TemporaryDirectory() as tmp:
         assert call(a, '/api/configurations/'+side['id'], 'DELETE')[0] == 200
         assert len(call(a, '/api/configurations')[1]) == 2
         assert all('settings' not in row for row in call(a, '/api/configurations')[1])
+        # Restart before mail cases so the global abuse budget doesn't couple independent suites.
+        proc.terminate(); proc.wait(timeout=5); proc=launch()
+        recovery=client(); register(recovery,'recovery')
+        recovery_other=client(); assert call(recovery_other,'/api/login','POST',cred('recovery'))[0] == 200
+        # Requesting recovery for unknown accounts is indistinguishable at HTTP level.
+        missing=call(client(),'/api/recovery','POST',{'email':'missing@example.test'})
+        before=seen_mail()
+        existing=call(client(),'/api/recovery','POST',{'email':'recovery@example.test'})
+        assert missing == existing and existing[0] == 202
+        reset=mail_token('recovery@example.test','reset',before)
+        assert call(client(),'/api/register/complete','POST',{'token':reset,'new_password':'changed-password-456'})[0] == 400
+        # Invalid, expired, cross-purpose and replayed tokens cannot change credentials.
+        assert call(client(),'/api/recovery/complete','POST',{'token':'0'*64,'new_password':'changed-password-456'})[0] == 400
+        reset_body={'token':reset,'new_password':'changed-password-456'}
+        assert call(client(),'/api/recovery/complete','POST',reset_body,'https://evil.example')[0] == 403
+        assert call(client(),'/api/recovery/complete','POST',reset_body)[0] == 200
+        assert call(recovery,'/api/me')[0] == 401
+        assert call(recovery_other,'/api/me')[0] == 401
+        assert call(client(),'/api/recovery/complete','POST',reset_body)[0] == 400
+        assert call(client(),'/api/login','POST',cred('recovery'))[0] == 401
+        assert call(recovery,'/api/login','POST',{**cred('recovery'),'password':'changed-password-456'})[0] == 200
+        before=seen_mail(); assert call(client(),'/api/recovery','POST',{'email':'recovery@example.test'})[0] == 202
+        expired=mail_token('recovery@example.test','reset',before)
+        with sqlite3.connect(env['FORM_LAB_DATABASE']) as db: db.execute("UPDATE email_tokens SET expires_at=0 WHERE purpose='reset'")
+        assert call(client(),'/api/recovery/complete','POST',{'token':expired,'new_password':'another-password-789'})[0] == 400
+        # Existing username accounts keep their password and library; bind email without merging users.
+        with sqlite3.connect(env['FORM_LAB_DATABASE']) as db:
+            db.execute("INSERT INTO users(username,password_hash) SELECT 'legacy',password_hash FROM users WHERE email='alice@example.test'")
+        legacy=client(); assert call(legacy,'/api/login','POST',{'username':'legacy','password':'very-long-password-123'})[0] == 200
+        legacy_save=call(legacy,'/api/configurations','POST',study_body)[1]
+        assert call(legacy,'/api/email','POST',{'email':'legacy@example.test','current_password':'wrong'})[0] == 401
+        before=seen_mail(); assert call(legacy,'/api/email','POST',{'email':'legacy@example.test','current_password':'very-long-password-123'})[0] == 200
+        verification=mail_token('legacy@example.test','email',before)
+        assert call(client(),'/api/email/complete','POST',{'token':verification})[0] == 200
+        assert call(legacy,'/api/me')[0] == 401
+        assert call(legacy,'/api/login','POST',{'email':'LEGACY@EXAMPLE.TEST','password':'very-long-password-123'})[0] == 200
+        assert call(legacy,'/api/me')[1]['username'] == 'legacy'
+        assert call(legacy,'/api/configurations/'+legacy_save['id'])[1]['settings'] == study
+        assert call(legacy,'/api/configurations/'+legacy_save['id'],'DELETE')[0] == 200
+        assert call(client(),'/api/email/complete','POST',{'token':verification})[0] == 400
+        # A password change invalidates an already-delivered recovery link.
+        proc.terminate(); proc.wait(timeout=5); proc=launch()
+        before=seen_mail(); assert call(client(),'/api/recovery','POST',{'email':'legacy@example.test'})[0] == 202
+        obsolete=mail_token('legacy@example.test','reset',before)
+        assert call(legacy,'/api/password','POST',{'current_password':'very-long-password-123','new_password':'legacy-password-456'})[0] == 200
+        assert call(client(),'/api/recovery/complete','POST',{'token':obsolete,'new_password':'attacker-password-789'})[0] == 400
+        # Neither signup nor email binding can take over an existing verified address.
+        duplicate=call(client(),'/api/register','POST',{'email':'alice@example.test'})
+        assert duplicate[0] == 202
+        before=seen_mail(); assert call(legacy,'/api/email','POST',{'email':'alice@example.test','current_password':'legacy-password-456'})[0] == 200
+        with sqlite3.connect(env['FORM_LAB_DATABASE']) as db:
+            assert db.execute("SELECT COUNT(*) FROM email_tokens WHERE email='alice@example.test'").fetchone()[0] == 0
+        # Resending replaces earlier signup links; weak passwords don't consume the newest link.
+        before=seen_mail(); assert call(client(),'/api/register','POST',{'email':'resend@example.test'})[0] == 202
+        first=mail_token('resend@example.test','signup',before)
+        before=seen_mail(); assert call(client(),'/api/register','POST',{'email':'RESEND@example.test'})[0] == 202
+        latest=mail_token('resend@example.test','signup',before)
+        assert latest != first
+        assert call(client(),'/api/register/complete','POST',{'token':first,'new_password':'very-long-password-123'})[0] == 400
+        assert call(client(),'/api/register/complete','POST',{'token':latest,'new_password':'short'})[0] == 400
+        assert call(client(),'/api/register/complete','POST',{'token':latest,'new_password':'very-long-password-123'})[0] == 200
+        proc.terminate(); proc.wait(timeout=5); proc=launch()
         backup=f'{tmp}/backup.sqlite3'
         subprocess.run([str(BINARY), 'backup', backup], env=env, check=True)
         assert os.stat(backup).st_mode & 0o777 == 0o600
@@ -138,10 +225,10 @@ with tempfile.TemporaryDirectory() as tmp:
         proc.terminate(); proc.wait(timeout=5)
         # Restore a snapshot into a separate path and start with registration disabled.
         env['FORM_LAB_DATABASE']=backup
-        env['FORM_LAB_SIGNUP_KEY']=''
+        env['FORM_LAB_REGISTRATION_ENABLED']='false'
         proc = launch()
         assert call(client(), '/api/register', 'POST', cred('charlie'))[0] == 403
-        assert call(a, '/api/account-options')[1] == {'signup_enabled':False}
+        assert call(a, '/api/account-options')[1] == {'signup_enabled':False,'email_enabled':True}
         assert call(a, '/api/configurations/'+form_save['id'])[1]['settings'] == study
         assert call(a, '/api/configurations/'+front['id'])[1]['revision'] == 2
         assert call(a, '/api/models')[1] == [{'uid':'abcd1234','title':'Study'}]
@@ -157,6 +244,7 @@ with tempfile.TemporaryDirectory() as tmp:
         proc.terminate(); proc.wait(timeout=5)
         secure_origin='https://form-lab.example.test'
         env['FORM_LAB_ORIGIN']=secure_origin
+        env['FORM_LAB_MAIL_TRANSPORT']='disabled'
         proc=launch()
         secure_req=urllib.request.Request(origin+'/api/login', data=json.dumps(cred('alice')).encode(), headers={'Origin':secure_origin,'Content-Type':'application/json'})
         with urllib.request.urlopen(secure_req) as response:
@@ -185,6 +273,33 @@ with tempfile.TemporaryDirectory() as tmp:
         with urllib.request.urlopen(logout_req) as response:
             cookie=response.headers['Set-Cookie']
             assert cookie.startswith('__Host-formlab_session=;') and '; Secure' in cookie and 'Max-Age=0' in cookie
-        print('Accounts/password rotation, saved study/model settings, overwrite conflicts, isolation, CSRF, throttling, backup/restore and restart checks passed.')
+        # Building each production transport must work without contacting its provider.
+        proc.terminate(); proc.wait(timeout=5)
+        env['FORM_LAB_MAIL_TRANSPORT']='mailgun'
+        env['FORM_LAB_MAILGUN_REGION']='eu'; env['FORM_LAB_MAILGUN_DOMAIN']='mg.example.test'; env['FORM_LAB_MAILGUN_API_KEY']='test-only-key'
+        proc=launch(); assert call(client(),'/api/account-options')[1]['email_enabled'] is True
+        proc.terminate(); proc.wait(timeout=5)
+        # A local self-signed SMTP endpoint must fail certificate validation, before AUTH/message data.
+        cert=f'{tmp}/smtp.crt'; private_key=f'{tmp}/smtp.key'
+        subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-keyout',private_key,'-out',cert,'-subj','/CN=localhost','-days','1','-addext','subjectAltName=DNS:localhost'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); context.load_cert_chain(cert,private_key)
+        smtp=socket.socket(); smtp.bind(('127.0.0.1',0)); smtp.listen(); smtp.settimeout(8)
+        smtp_port=smtp.getsockname()[1]; rejected=[]; plaintext=[]
+        def reject_untrusted_smtp():
+            try:
+                connection,_=smtp.accept()
+                with connection:
+                    try:
+                        with context.wrap_socket(connection,server_side=True) as tls:
+                            plaintext.append('TLS unexpectedly accepted an untrusted certificate')
+                    except ssl.SSLError as error: rejected.append(str(error))
+            finally: smtp.close()
+        thread=threading.Thread(target=reject_untrusted_smtp,daemon=True); thread.start()
+        env.update(FORM_LAB_ORIGIN=origin,FORM_LAB_REGISTRATION_ENABLED='true',FORM_LAB_MAIL_TRANSPORT='smtp',FORM_LAB_SMTP_HOST='localhost',FORM_LAB_SMTP_PORT=str(smtp_port),FORM_LAB_SMTP_USERNAME='test-user',FORM_LAB_SMTP_PASSWORD='test-password')
+        proc=launch()
+        assert call(client(),'/api/register','POST',{'email':'tls@example.test'})[0] == 202
+        thread.join(timeout=10)
+        assert rejected and not plaintext, 'SMTP must reject untrusted TLS certificates'
+        print('Email signup/verification/recovery, legacy email binding, password rotation, saved study/model settings, overwrite conflicts, isolation, CSRF, throttling, backup/restore and restart checks passed.')
     finally:
         proc.terminate(); proc.wait(timeout=5)

@@ -1,6 +1,10 @@
-generated_at: "2026-11-07T19:33:27+00:00"
+generated_at: "2026-11-07T20:10:13+00:00"
 generated_from: "docs/README.md"
 fast_paths:
+- label: "Configure signup, recovery and Mailgun/SMTP"
+  links:
+  - title: "Email accounts"
+    path: "docs/impl_email-accounts.md"
 - label: "Save, reopen or overwrite references"
   links:
   - title: "Accounts and saved references"
@@ -47,6 +51,11 @@ docs:
   type: "prd"
   section: "Product"
   summary: "User goals, reference analysis, exercise design, scope, and measurable usability requirements."
+- path: "docs/impl_email-accounts.md"
+  title: "Email accounts"
+  type: "impl"
+  section: "Engineering"
+  summary: "Verified email signup, password recovery, legacy account linking, configurable Mailgun API/SMTP TLS, local capture and verification limits."
 - path: "docs/impl_saved-references.md"
   title: "Accounts and saved references"
   type: "impl"

@@ -9,9 +9,11 @@ FROM rust:1.96-bookworm AS backend
 WORKDIR /app
 COPY server/Cargo.toml server/Cargo.lock ./
 COPY server/src ./src
+RUN apt-get update && apt-get install -y --no-install-recommends cmake && rm -rf /var/lib/apt/lists/*
 RUN cargo build --release --locked
 
 FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN useradd --uid 10001 --create-home app && mkdir -p /data && chown app:app /data
 WORKDIR /app
 COPY --from=frontend /app/frontend/dist ./frontend/dist

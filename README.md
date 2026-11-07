@@ -12,8 +12,11 @@ Requires Node.js 22.12+ with npm and Rust/Cargo (verified with Rust 1.96). Docke
 cd /Users/mlitwiniuk/Sites/rust/form-lab
 npm run setup
 npm run build
-export FORM_LAB_SIGNUP_KEY="$(openssl rand -hex 32)"
-printf 'Local account creation key: %s\n' "$FORM_LAB_SIGNUP_KEY"
+export FORM_LAB_ORIGIN=http://127.0.0.1:3000
+export FORM_LAB_REGISTRATION_ENABLED=true
+export FORM_LAB_MAIL_TRANSPORT=file
+export FORM_LAB_MAIL_FROM='Form Lab <no-reply@example.test>'
+export FORM_LAB_MAIL_DIRECTORY="$PWD/.local-mail"
 cargo run --locked --manifest-path server/Cargo.toml
 ```
 
@@ -21,16 +24,16 @@ Leave that terminal running. Open [Form Lab](http://127.0.0.1:3000/) or [the Ske
 
 In your browser:
 
-1. Choose **Sign in** in either header, switch to **Create account**, and enter a username, a password of at least 12 characters, its confirmation, and the printed account creation key. Registration signs you in. Switch between **Form studies** and **Sketchfab** to confirm the same account works on both pages.
+1. Choose **Sign in → Create account**, enter an email address, and request a signup link. Open the newest `.eml` file in `.local-mail`, follow its link, and choose/confirm a password of at least 12 characters. Email verification creates the account and signs you in. Switch between **Form studies** and **Sketchfab** to confirm the same account works on both pages.
 2. Arrange a Form Lab study: change forms, camera/projection, guides and drawing lock. Choose **Save**, enter a name and **Save as new**. Change the study, choose **Save** again and **Overwrite** the last save. Choose **Save as new** to keep a separate copy.
 3. In Sketchfab, paste an embeddable model link or ID and choose **Load model**. Adjust projection, angle, rotation step and zoom. Save a named view, overwrite it after editing, or save another angle as new. Near-orthographic remains a perspective approximation.
 4. Open **Library** on either page. Filter studies or Sketchfab views, reopen each save and inspect its settings. Opening the other tool's save switches tools automatically. Refresh to confirm the selected save reopens. Your saved library is private to your account.
 5. Use **Share link** and open it while signed out; public snapshots do not require an account and omit the private saved-record ID. Try **Save image** and inspect the PNG.
 6. Sign in from another browser profile and verify the same library appears. Open one save in both profiles, update it in one, then try overwriting the older copy: the second profile should report a conflict. **Save as new** preserves its local version.
-7. Open your username menu to change your password or sign out. Password changes require the current password and matching new passwords, then sign out other sessions. A second account should see its own separate library.
+7. Open your account menu to change your password or sign out. Password changes require the current password and matching new passwords, then sign out other sessions. A second account should see its own separate library.
 8. Stop and restart the server and confirm the library persists. The database is `form-lab.sqlite3` in the checkout root, with SQLite WAL/SHM sidecars; all are ignored by Git. Do not delete them to restart.
 
-To disable new accounts locally, stop the server, run `unset FORM_LAB_SIGNUP_KEY`, then restart it. Existing accounts still sign in without an account creation key. Password changes are available in the account dialog. Email password recovery, account deletion and an administrator UI are not implemented.
+For recovery, choose **Forgot your password?**, inspect the captured reset email, and submit a new password through its link. Reset signs out existing sessions. To close registration, restart with `FORM_LAB_REGISTRATION_ENABLED=false`; recovery and existing accounts remain available. No signup key is required. Existing username accounts can add a verified email from the account dialog without losing their library. See [email setup and verification](docs/impl_email-accounts.md) for Mailgun API or SMTP over TLS.
 
 These are manual checks for you to perform; the integrated Sketchfab page has not been visually/browser-tested during this review. Testing on three physical machines requires hosting the same server at one reachable HTTPS origin. The loopback URLs above are accessible only on the development machine.
 
@@ -48,7 +51,7 @@ In the second:
 npm run dev
 ```
 
-Open [the Vite application](http://127.0.0.1:5173/) or [its Sketchfab page](http://127.0.0.1:5173/sketchfab/). Vite proxies `/api` to port 3000. Use `127.0.0.1` consistently; changing the browser to `localhost` changes the Origin and cookies. To create accounts in this mode, export a signup key in the API terminal before starting it, as above. Stop both processes with Ctrl+C.
+Open [the Vite application](http://127.0.0.1:5173/) or [its Sketchfab page](http://127.0.0.1:5173/sketchfab/). Vite proxies `/api` to port 3000. Use `127.0.0.1` consistently; changing the browser to `localhost` changes the Origin and cookies. To create accounts in this mode, export the local file-mail variables in the API terminal before starting it, as above. Stop both processes with Ctrl+C.
 
 For form studies or the viewer without accounts, `npm run dev` alone is sufficient. For a static production preview use `npm run build && npm run preview`, then open the URL Vite prints. Static hosting cannot provide the SQLite library. Always open through HTTP, rather than double-clicking `index.html`.
 
@@ -63,9 +66,9 @@ cargo clippy --locked --manifest-path server/Cargo.toml -- -D warnings
 python3 server/tests/integration.py
 ```
 
-The Python check needs Python 3, the debug binary built by `cargo build`, built frontend assets, and permission to bind a temporary loopback port. It launches/stops its own server and uses temporary databases; it does not use your local library. It checks accounts, separate-account libraries, multiple sessions, request-origin protection, session cookie flags and revocation/expiry, throttling, restart persistence, and online backup/restore. Camera tests mock Sketchfab's API and cannot prove live rendering or image downloads.
+The Python check needs Python 3 and the OpenSSL CLI, the debug binary built by `cargo build`, built frontend assets, and permission to bind a temporary loopback port. It launches/stops its own server and uses temporary databases; it does not use your local library. It checks email signup/verification/recovery, TLS rejection of an untrusted SMTP certificate, accounts, separate-account libraries, multiple sessions, request-origin protection, session cookie flags and revocation/expiry, throttling, restart persistence, and online backup/restore. Camera tests mock Sketchfab's API and cannot prove live rendering or image downloads.
 
-Verified on 2026-11-07: **261 frontend tests**, production build, Rust test/build/Clippy, backend HTTP integration, Compose configuration, Kamal 2.12 configuration using placeholder host values, and strict docs index validation. npm and RustSec lockfile audits report no known vulnerabilities. Build output retains a non-fatal Manifold browser-externalization warning. This account implementation has not had an independent security audit.
+Verified on 2026-11-07: **268 frontend tests**, production build, Rust test/build/Clippy, backend HTTP integration, Compose configuration, Kamal 2.12 configuration using placeholder host values, and strict docs index validation. npm and RustSec lockfile audits report no known vulnerabilities. Build output retains a non-fatal Manifold browser-externalization warning. This account implementation has not had an independent security audit.
 
 ## Self-hosting
 
@@ -101,6 +104,7 @@ Edits show a lighter live preview immediately, then refine to full detail after 
 
 The current test results and limits are recorded above. The implementation notes below describe individual milestones and may contain historical test counts or earlier architecture boundaries.
 
+- [Email signup, recovery and Mailgun/SMTP configuration](docs/impl_email-accounts.md)
 - [Accounts, saved settings and overwrite behavior](docs/impl_saved-references.md)
 - [Share links and URL format](docs/impl_share-links.md)
 - [Control points and local thickness](docs/impl_curve-editor.md)

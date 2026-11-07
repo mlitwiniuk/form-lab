@@ -4,7 +4,7 @@
 #   optional: KAMAL_REGISTRY_SERVER (default ghcr.io), FORM_LAB_ARCH (default amd64),
 #             FORM_LAB_BUILDER (remote Docker host for builds, e.g. ssh://user@host),
 #             FORM_LAB_PROXY_SSL ("false" when a TLS-terminating reverse proxy sits in front; default true)
-# Secrets (KAMAL_REGISTRY_PASSWORD, FORM_LAB_SIGNUP_KEY) are referenced from .kamal/secrets.
+# Secrets (KAMAL_REGISTRY_PASSWORD and email delivery credentials) are referenced from .kamal/secrets.
 service: form-lab
 image: <%= ENV.fetch("FORM_LAB_IMAGE") %>
 minimum_version: 2.12.0
@@ -41,8 +41,17 @@ ssh:
 env:
   clear:
     FORM_LAB_ORIGIN: https://<%= ENV.fetch("FORM_LAB_HOST") %>
+    FORM_LAB_REGISTRATION_ENABLED: <%= ENV.fetch("FORM_LAB_REGISTRATION_ENABLED", "true").inspect %>
+    FORM_LAB_MAIL_TRANSPORT: <%= ENV.fetch("FORM_LAB_MAIL_TRANSPORT", "disabled").inspect %>
+    FORM_LAB_MAIL_FROM: <%= ENV.fetch("FORM_LAB_MAIL_FROM", "").inspect %>
+    FORM_LAB_MAILGUN_REGION: <%= ENV.fetch("FORM_LAB_MAILGUN_REGION", "us").inspect %>
+    FORM_LAB_MAILGUN_DOMAIN: <%= ENV.fetch("FORM_LAB_MAILGUN_DOMAIN", "").inspect %>
+    FORM_LAB_SMTP_HOST: <%= ENV.fetch("FORM_LAB_SMTP_HOST", "").inspect %>
+    FORM_LAB_SMTP_PORT: <%= ENV.fetch("FORM_LAB_SMTP_PORT", "465").inspect %>
   secret:
-    - FORM_LAB_SIGNUP_KEY
+    - FORM_LAB_MAILGUN_API_KEY
+    - FORM_LAB_SMTP_USERNAME
+    - FORM_LAB_SMTP_PASSWORD
 volumes:
   - form-lab-data:/data
 # Vite's hashed assets remain available across rolling application releases.

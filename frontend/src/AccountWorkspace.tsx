@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { BookOpen, Box, Check, LogIn, Save, UserRound, X } from 'lucide-react';
+import { takeAccountLink } from './account-links';
+import { EmailActionForm } from './EmailActionForm';
 import { ApiError, configurationUrl, errorMessage, request, type SavedConfiguration, type SaveKind } from './library';
 
 function Modal({ title, children, close }: { title: string; children: ReactNode; close: () => void }) {
@@ -9,11 +11,14 @@ function Modal({ title, children, close }: { title: string; children: ReactNode;
     <div className="dialog-heading"><h2 id="workspace-dialog-title">{title}</h2><button className="icon-button" aria-label="Close dialog" onClick={close}><X size={20} /></button></div>{children}
   </dialog>;
 }
-type View = 'auth' | 'account' | 'library' | 'save' | null;
+type View = 'auth' | 'recover' | 'email-action' | 'account' | 'library' | 'save' | null;
 interface Props { kind: SaveKind; capture: () => unknown | Promise<unknown>; restore: (settings: unknown) => void | Promise<void>; disabled?: boolean; restoreReady?: boolean; children: ReactNode }
 export function WorkspaceHeader({ kind, capture, restore, disabled, restoreReady = true, children }: Props) {
   const [user, setUser] = useState<string | null>(null), [available, setAvailable] = useState(true), [checking, setChecking] = useState(true);
-  const [view, setView] = useState<View>(null), [signup, setSignup] = useState(false), [register, setRegister] = useState(false);
+  const [emailAction, setEmailAction] = useState(takeAccountLink);
+  const [accountEmail, setAccountEmail] = useState<string | null>(null), [emailEnabled, setEmailEnabled] = useState(false);
+  const [view, setView] = useState<View>(emailAction ? 'email-action' : null), [signup, setSignup] = useState(false), [register, setRegister] = useState(false);
+  const [emailNotice, setEmailNotice] = useState('');
   const [pending, setPending] = useState(false), [message, setMessage] = useState(''), [notice, setNotice] = useState('');
   const [saves, setSaves] = useState<SavedConfiguration[]>([]), [selected, setSelected] = useState<SavedConfiguration | null>(null);
   const [title, setTitle] = useState(''), [overwrite, setOverwrite] = useState(false), [filter, setFilter] = useState<'all' | SaveKind>('all');
@@ -23,17 +28,21 @@ export function WorkspaceHeader({ kind, capture, restore, disabled, restoreReady
   const initialSave = useRef(new URLSearchParams(location.search).get('save'));
   const sessionVersion = useRef(0);
   const initialOpened = useRef(false), afterSignIn = useRef<View>(null);
-  const close = useCallback(() => { setView(null); setMessage(''); setConfirmation(null); }, []);
-  const clearSession = useCallback(() => { sessionVersion.current++; userRef.current = null; setUser(null); setSaves([]); setSelected(null); }, []);
+  const close = useCallback(() => { setEmailAction(null); setView(null); setMessage(''); setEmailNotice(''); setConfirmation(null); }, []);
+  const clearSession = useCallback(() => { sessionVersion.current++; userRef.current = null; setUser(null); setAccountEmail(null); setSaves([]); setSelected(null); }, []);
   const refreshUser = useCallback(async () => {
     const version = sessionVersion.current;
-    try { const me = await request<{ username: string }>('me'); if (version !== sessionVersion.current) return null; if (userRef.current !== me.username) { setSelected(null); setSaves([]); } userRef.current = me.username; setUser(me.username); setAvailable(true); return me.username; }
+    try { const me = await request<{ username: string; email: string | null }>('me'); if (version !== sessionVersion.current) return null; if (userRef.current !== (me.email ?? me.username)) { setSelected(null); setSaves([]); } userRef.current = me.email ?? me.username; setUser(me.email ?? me.username); setAccountEmail(me.email); setAvailable(true); return me.email ?? me.username; }
     catch (error) { if (version !== sessionVersion.current) return null; clearSession(); setAvailable(error instanceof ApiError && error.status === 401); return null; }
     finally { setChecking(false); }
   }, [clearSession]);
   const list = useCallback(async () => { const owner = userRef.current; const rows = await request<SavedConfiguration[]>('configurations'); if (owner === userRef.current) setSaves(rows); return rows; }, []);
-  useEffect(() => { void refreshUser(); void request<{signup_enabled: boolean}>('account-options').then(options => setSignup(options.signup_enabled)).catch(() => {}); }, [refreshUser]);
-  useEffect(() => { if (!checking && !user && view && view !== 'auth') setView('auth'); }, [checking, user, view]);
+  useEffect(() => { void refreshUser(); void request<{signup_enabled: boolean; email_enabled: boolean}>('account-options').then(options => { setSignup(options.signup_enabled); setEmailEnabled(options.email_enabled); }).catch(() => {}); }, [refreshUser]);
+  useEffect(() => { if (!checking && !user && view && !['auth', 'recover', 'email-action'].includes(view)) setView('auth'); }, [checking, user, view]);
+  useEffect(() => {
+    const open = () => { const action = takeAccountLink(); if (action) { setEmailAction(action); setView('email-action'); setMessage(''); setEmailNotice(''); } };
+    window.addEventListener('formlab-account-link', open); return () => window.removeEventListener('formlab-account-link', open);
+  }, []);
   // Recheck after returning from the other tool or another tab; never retain another account's saves.
   useEffect(() => { const focus = () => { void refreshUser(); }; window.addEventListener('focus', focus); return () => window.removeEventListener('focus', focus); }, [refreshUser]);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 6000); return () => clearTimeout(timer); }, [notice]);
@@ -52,11 +61,11 @@ export function WorkspaceHeader({ kind, capture, restore, disabled, restoreReady
     rememberSave(save);
   }
   useEffect(() => {
-    if (checking || !initialSave.current || initialOpened.current || !restoreReady) return;
+    if (emailAction || checking || !initialSave.current || initialOpened.current || !restoreReady) return;
     if (!user) { setView('auth'); setMessage('Sign in to open this saved reference.'); return; }
     initialOpened.current = true; setPending(true);
     void request<SavedConfiguration>(`configurations/${encodeURIComponent(initialSave.current)}`).then(openSaved).catch(fail).finally(() => setPending(false));
-  }, [checking, user, restoreReady]); // Capture/restore callbacks are read through refs.
+  }, [checking, user, restoreReady, emailAction]); // Capture/restore callbacks are read through refs.
   async function show(next: View) {
     setMessage(''); setConfirmation(null);
     if (!user) { afterSignIn.current = next === 'auth' ? null : next; setRegister(false); setView('auth'); return; }
@@ -66,17 +75,33 @@ export function WorkspaceHeader({ kind, capture, restore, disabled, restoreReady
   }
   async function authenticate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = event.currentTarget, data = new FormData(form);
-    if (register && data.get('password') !== data.get('confirm_password')) { setMessage('The passwords do not match.'); return; }
     setPending(true); setMessage('');
     try {
-      await request(register ? 'register' : 'login', 'POST', Object.fromEntries(data));
-      form.reset(); sessionVersion.current++; await refreshUser(); close();
-      const next = afterSignIn.current; afterSignIn.current = null;
-      if (next === 'library') { setView('library'); await list(); }
-      if (next === 'save') { setTitle(''); setOverwrite(false); setView('save'); }
-      setNotice(register ? 'Your account is ready. Save your first reference.' : 'Signed in. Your library is ready.');
-    } catch (error) { setMessage(error instanceof ApiError && error.status === 401 ? 'Username or password is incorrect.' : errorMessage(error)); }
+      if (register) {
+        const result = await request<{message: string}>('register', 'POST', { email: data.get('email') });
+        setMessage(''); setEmailNotice(result.message); form.reset(); setView('auth'); setRegister(false);
+      } else {
+        await request('login', 'POST', { email: String(data.get('identity')).includes('@') ? data.get('identity') : '', username: data.get('identity'), password: data.get('password') });
+        form.reset(); sessionVersion.current++; await refreshUser(); close(); await resumeAction();
+        setNotice('Signed in. Your library is ready.');
+      }
+    } catch (error) { setMessage(error instanceof ApiError && error.status === 401 ? 'Email or password is incorrect.' : errorMessage(error)); }
     finally { setPending(false); }
+  }
+  async function resumeAction() {
+    const next = afterSignIn.current; afterSignIn.current = null;
+    if (next === 'library') { setView('library'); await list(); }
+    if (next === 'save') { setTitle(''); setOverwrite(false); setView('save'); }
+  }
+  async function recover(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); const form = event.currentTarget; setPending(true); setMessage('');
+    try { const result = await request<{message: string}>('recovery','POST',{email:new FormData(form).get('email')}); setEmailNotice(result.message); form.reset(); }
+    catch (error) { setMessage(errorMessage(error)); } finally { setPending(false); }
+  }
+  async function requestEmail(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); const form = event.currentTarget; setPending(true); setMessage('');
+    try { const result = await request<{message:string}>('email','POST',Object.fromEntries(new FormData(form))); setEmailNotice(result.message); form.reset(); }
+    catch (error) { setMessage(error instanceof ApiError && error.status === 401 ? 'Current password is incorrect, or your session has ended.' : errorMessage(error)); } finally { setPending(false); }
   }
   async function saveCurrent(event: FormEvent) {
     event.preventDefault(); if (!title.trim()) return;
@@ -105,22 +130,27 @@ export function WorkspaceHeader({ kind, capture, restore, disabled, restoreReady
       <div className="header-actions">{children}<button className="secondary-button" onClick={() => void show('save')} disabled={disabled || checking}><Save size={16} /><span>Save</span></button><button className="secondary-button" onClick={() => void show('library')} disabled={checking}><BookOpen size={16} /><span>Library</span></button><button className="secondary-button account-trigger" onClick={() => void show(user ? 'account' : 'auth')} disabled={checking}>{user ? <UserRound size={16} /> : <LogIn size={16} />}<span>{checking ? 'Checking…' : user ?? 'Sign in'}</span></button></div>
     </header>
     <div className={`share-status ${notice ? 'visible' : ''}`} role="status">{notice}</div>
-    {view && <Modal title={view === 'auth' ? register ? 'Create your account.' : 'Welcome back.' : view === 'library' ? 'Your reference library.' : view === 'save' ? 'Keep this reference.' : 'Your account.'} close={close}>
+    {view && <Modal title={view === 'email-action' ? emailAction?.purpose === 'signup' ? 'Finish your account.' : emailAction?.purpose === 'reset' ? 'Reset your password.' : 'Confirm your email.' : view === 'recover' ? 'Reset your password.' : view === 'auth' ? register ? 'Create your account.' : 'Welcome back.' : view === 'library' ? 'Your reference library.' : view === 'save' ? 'Keep this reference.' : 'Your account.'} close={close}>
+      {emailNotice && <p className="account-success" role="status">{emailNotice}</p>}
       {message && <p className="account-error" role="alert">{message}</p>}
       {view === 'auth' && <>
         <p className="dialog-intro">One account for your form studies and Sketchfab references. Pick up where you left off on any device.</p>
         {!available && <p className="account-error">Accounts are unavailable at this address. You can still explore, export images and copy public view links.<button className="text-button" onClick={() => void refreshUser()}>Retry connection</button></p>}
         {signup && <div className="mode-tabs account-tabs"><button aria-pressed={!register} onClick={() => { setRegister(false); setMessage(''); }}>Sign in</button><button aria-pressed={register} onClick={() => { setRegister(true); setMessage(''); }}>Create account</button></div>}
         <form onSubmit={authenticate} key={String(register)} className="account-form"><fieldset disabled={pending || !available}>
-          <label>Username<input name="username" required minLength={3} maxLength={40} autoComplete="username" autoCapitalize="none" spellCheck={false} pattern="[A-Za-z0-9_-]+" autoFocus /></label>
-          <label>Password<input name="password" type="password" required minLength={register ? 12 : 1} maxLength={1024} autoComplete={register ? 'new-password' : 'current-password'} /></label>
-          {register && <><label>Confirm password<input name="confirm_password" type="password" required minLength={12} autoComplete="new-password" /></label><label>Account creation key<input name="signup_key" type="password" required autoComplete="off" /></label><p className="parameter-tip">Use the key provided by the person hosting Form Lab. Choose a password with at least 12 characters.</p></>}
-          <button className="primary-button full-width" type="submit">{pending ? 'Please wait…' : register ? 'Create account' : 'Sign in'}</button>
+          {register ? <><label>Email address<input name="email" type="email" required maxLength={254} autoComplete="email" autoCapitalize="none" autoFocus /></label><p className="parameter-tip">We will email you a verification link. You will choose your password after confirming your address.</p></> : <><label>Email or existing username<input name="identity" required maxLength={254} autoComplete="username" autoCapitalize="none" spellCheck={false} autoFocus /></label><label>Password<input name="password" type="password" required maxLength={1024} autoComplete="current-password" /></label></>}
+          <button className="primary-button full-width" type="submit">{pending ? 'Please wait…' : register ? 'Email me a signup link' : 'Sign in'}</button>
         </fieldset></form>
-        {!signup && available && <p className="parameter-tip">Account creation is currently closed. Existing accounts can sign in.</p>}
-        {!register && <p className="parameter-tip">Forgot your password? Contact the person hosting Form Lab. Email password recovery is not available.</p>}
+        {!signup && available && <p className="parameter-tip">New account registration is currently unavailable. Existing accounts can sign in.</p>}
+        {!register && emailEnabled && <button className="text-button" onClick={() => { setView('recover'); setMessage(''); }}>Forgot your password?</button>}
       </>}
-      {view === 'account' && <><p className="dialog-intro">Signed in as <strong>{user}</strong>. Your library is shared between both reference tools.</p><h3>Change password</h3><form className="account-form" onSubmit={changePassword}><fieldset disabled={pending}><label>Current password<input name="current_password" type="password" required autoComplete="current-password" /></label><label>New password<input name="new_password" type="password" required minLength={12} maxLength={1024} autoComplete="new-password" /></label><label>Confirm new password<input name="confirm_password" type="password" required minLength={12} autoComplete="new-password" /></label><p className="parameter-tip">Changing your password signs out your other browsers and devices.</p><button className="primary-button" type="submit">{pending ? 'Updating…' : 'Update password'}</button></fieldset></form><div className="account-footer"><button className="secondary-button" disabled={pending} onClick={async () => { setPending(true); try { await request('logout', 'POST', {}); clearSession(); close(); const url = new URL(location.href); url.searchParams.delete('save'); history.replaceState(history.state, '', url); setNotice('Signed out on this device.'); } catch (error) { fail(error); } finally { setPending(false); } }}>Sign out on this device</button></div></>}
+      {view === 'recover' && <><p className="dialog-intro">Enter your verified email address and we will send a password reset link.</p><form className="account-form" onSubmit={recover}><fieldset disabled={pending || !emailEnabled}><label>Email address<input name="email" type="email" required maxLength={254} autoComplete="email" autoFocus /></label><button className="primary-button full-width">{pending ? 'Sending…' : 'Email reset link'}</button></fieldset></form><button className="text-button" onClick={() => { setView('auth'); setRegister(false); setMessage(''); }}>Back to sign in</button></>}
+      {view === 'email-action' && emailAction && <EmailActionForm key={`${emailAction.purpose}:${emailAction.token}`} action={emailAction} completed={async purpose => {
+        setEmailAction(null); setMessage('');
+        if (purpose === 'signup') { sessionVersion.current++; await refreshUser(); close(); await resumeAction(); setNotice('Your email is verified and your account is ready.'); }
+        else { clearSession(); setRegister(false); setView('auth'); setNotice(purpose === 'reset' ? 'Password reset. Sign in with your new password.' : 'Email confirmed. Sign in using your email.'); }
+      }} back={() => { setEmailAction(null); setView('auth'); setRegister(false); setMessage(''); }} />}
+      {view === 'account' && <><p className="dialog-intro">Signed in as <strong>{user}</strong>. Your library is shared between both reference tools.</p>{emailEnabled && <><h3>{accountEmail ? 'Change email address' : 'Add your email address'}</h3><p className="parameter-tip">{accountEmail ? `Verified email: ${accountEmail}` : 'Add and verify an email to enable password recovery for your existing account.'}</p><form className="account-form" onSubmit={requestEmail}><fieldset disabled={pending}><label>Email address<input name="email" type="email" required maxLength={254} autoComplete="email" /></label><label>Current password<input name="current_password" type="password" required maxLength={1024} autoComplete="current-password" /></label><button className="secondary-button">Email verification link</button></fieldset></form></>}<h3>Change password</h3><form className="account-form" onSubmit={changePassword}><fieldset disabled={pending}><label>Current password<input name="current_password" type="password" required autoComplete="current-password" /></label><label>New password<input name="new_password" type="password" required minLength={12} maxLength={1024} autoComplete="new-password" /></label><label>Confirm new password<input name="confirm_password" type="password" required minLength={12} autoComplete="new-password" /></label><p className="parameter-tip">Changing your password signs out your other browsers and devices.</p><button className="primary-button" type="submit">{pending ? 'Updating…' : 'Update password'}</button></fieldset></form><div className="account-footer"><button className="secondary-button" disabled={pending} onClick={async () => { setPending(true); try { await request('logout', 'POST', {}); clearSession(); close(); const url = new URL(location.href); url.searchParams.delete('save'); history.replaceState(history.state, '', url); setNotice('Signed out on this device.'); } catch (error) { fail(error); } finally { setPending(false); } }}>Sign out on this device</button></div></>}
       {view === 'save' && <form className="account-form" onSubmit={saveCurrent}><p className="dialog-intro">{kind === 'study' ? 'Save your forms, deformations, camera and drawing settings.' : 'Save this model, camera angle, projection and drawing settings.'}</p><fieldset disabled={pending}>
         <label>Name<input value={title} onChange={e => setTitle(e.target.value)} required maxLength={120} placeholder={kind === 'study' ? 'e.g. Twisted form, side view' : 'e.g. Skull, three-quarter view'} autoFocus /></label>
         {selected && <div className="save-options"><label><input type="radio" name="save-mode" checked={overwrite} onChange={() => setOverwrite(true)} />Overwrite “{selected.title}”</label><label><input type="radio" name="save-mode" checked={!overwrite} onChange={() => setOverwrite(false)} />Save as new</label></div>}
