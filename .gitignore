@@ -7,3 +7,8 @@ dist/
 .env.*
 !.env.example
 .wrangler/
+
+server/target/
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal

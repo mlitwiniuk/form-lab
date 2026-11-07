@@ -1,6 +1,10 @@
-generated_at: "2026-10-23T12:44:46+00:00"
+generated_at: "2026-11-07T18:46:56+00:00"
 generated_from: "docs/README.md"
 fast_paths:
+- label: "Run the Sketchfab viewer and synced library"
+  links:
+  - title: "Sketchfab viewer"
+    path: "docs/impl_sketchfab-viewer.md"
 - label: "Deploy to your Cloudflare account"
   links:
   - title: "Cloudflare deployment"
@@ -39,6 +43,11 @@ docs:
   type: "prd"
   section: "Product"
   summary: "User goals, reference analysis, exercise design, scope, and measurable usability requirements."
+- path: "docs/impl_sketchfab-viewer.md"
+  title: "Sketchfab viewer"
+  type: "impl"
+  section: "Engineering"
+  summary: "Perspective controls, share links, account-backed model references, Kamal/Compose hosting, backup recovery and verification."
 - path: "docs/impl_cloudflare-deployment.md"
   title: "Cloudflare deployment"
   type: "impl"

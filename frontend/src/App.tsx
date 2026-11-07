@@ -383,6 +383,7 @@ export default function App() {
       <a className="brand" href="./" aria-label="Form Lab home"><span className="brand-symbol"><Box size={24} strokeWidth={1.5} /></span>Form Lab<span className="brand-dot">.</span></a>
       <span className="header-context">A space to understand form</span>
       <div className="header-actions">
+        <a className="secondary-button" href="/sketchfab/">Sketchfab viewer</a>
         <button ref={shareButton} className="secondary-button share-button" onClick={copyShareLink} aria-label="Copy share link" title="Copy share link"><Link size={17} /><span>Share link</span></button>
         <button className="secondary-button export-button" onClick={exportImage} disabled={busy || !!error} aria-label="Save image" title="Save image"><ArrowDownToLine size={17} /><span>Save image</span></button>
         <button className={`primary-button ${locked ? 'locked' : ''}`} onClick={toggleDrawing} aria-pressed={locked}>{locked ? <UnlockKeyhole size={16} /> : <LockKeyhole size={16} />}<span>{locked ? 'Edit forms' : 'Start drawing'}</span></button>

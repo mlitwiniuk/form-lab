@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sketchfab sketch reference</title>
+<script src="https://static.sketchfab.com/api/sketchfab-viewer-1.12.1.js"></script>
+<style>
+*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;font:15px system-ui,sans-serif;color:#242d32;background:#f6f7f5}header{padding:14px 20px;background:#fff;border-bottom:1px solid #d9dfdc;display:flex;align-items:center;gap:12px;flex-wrap:wrap}h1{font-size:17px;margin:0 12px 0 0}form{display:flex;gap:7px;flex:1;min-width:280px}input{min-width:0;flex:1;padding:9px;border:1px solid #aebbb5;border-radius:6px;font:inherit}button{font:inherit;padding:9px 13px;border:1px solid #bfcac4;border-radius:6px;background:#fff;cursor:pointer;color:#24332c}button:hover{background:#edf4ef}button.primary{background:#245e48;color:white;border-color:#245e48}.controls{padding:10px 20px;display:flex;align-items:center;gap:7px;flex-wrap:wrap;background:#f6f7f5}.controls span{margin-right:6px;color:#53635a}.hint{margin-left:auto;color:#53635a;font-size:13px}.rotation{padding:0 20px 10px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}.rotation label{font-size:13px;color:#53635a}.rotation select{font:inherit;padding:7px;border:1px solid #bfcac4;border-radius:6px;background:white}.library{padding:8px 20px;background:#fff;border-block:1px solid #d9dfdc}.library summary{cursor:pointer;font-weight:600}.library p{font-size:13px;color:#53635a}.library form{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}.library label{font-size:13px;display:flex;align-items:center;gap:5px}.library input{width:180px;flex:initial}.library li{display:flex;gap:8px;align-items:center;margin:6px 0}.library ul{padding:0;list-style:none}#projection{font:inherit;padding:8px;border:1px solid #bfcac4;border-radius:6px;background:white}.projection{font-size:13px;color:#53635a;margin-left:auto}iframe{display:block;width:100%;height:calc(100vh - 175px);min-height:420px;border:0;background:white}#status{font-size:13px;color:#56665d}a{color:#245e48}@media(max-width:650px){iframe{height:65vh}.hint{margin-left:0;width:100%}}
+</style></head><body>
+<header><a href="/">← Form Lab</a><h1>Sketchfab sketch reference</h1><form id="form"><input id="model" aria-label="Sketchfab model link or ID" placeholder="Paste a Sketchfab model link or ID" required><button class="primary">Load model</button></form><span id="status" role="status">Loading…</span></header>
+<div class="controls"><span>View</span><button data-view="top">Top</button><button data-view="left">Left side</button><button data-view="right">Right side</button><button data-view="front">Front</button><button data-view="rear">Rear</button><button data-view="threequarter">3/4 view</button><button id="zoom-in">Zoom in</button><button id="zoom-out">Zoom out</button><button id="fit">Reset zoom</button><label for="projection">Projection</label><select id="projection"><option value="flat">Near-orthographic</option><option value="original">Original perspective</option><option value="wide">Wide perspective</option></select><button id="share">Copy link</button><button id="save">Save image</button><span class="hint">Drag to rotate · Zoom buttons adjust size · Save image to print</span></div>
+<div class="rotation" role="group" aria-label="Rotate one axis at a time"><span>Rotate view</span><button type="button" data-orbit="left" aria-label="Rotate left">← Left</button><button type="button" data-orbit="right" aria-label="Rotate right">Right →</button><button type="button" data-orbit="up" aria-label="Rotate up">↑ Up</button><button type="button" data-orbit="down" aria-label="Rotate down">Down ↓</button><label for="step">Step</label><select id="step"><option value="1">1°</option><option value="5" selected>5°</option><option value="15">15°</option><option value="45">45°</option></select><span class="projection">Near-orthographic is an approximation; slight perspective remains</span></div>
+<details class="library"><summary>My model library &amp; account</summary><p>Sign in to sync model references across devices. Models are loaded from Sketchfab.</p><div id="account-status" role="status"></div><form id="account-form"><label>Username <input name="username" autocomplete="username" required minlength="3" maxlength="40"></label><label>Password <input name="password" type="password" autocomplete="current-password" required minlength="12" maxlength="1024"></label><label>Account creation key <input name="signup_key" type="password" autocomplete="off" placeholder="Only for a new account"></label><button type="submit">Sign in</button><button type="button" id="register">Create account</button></form><div id="library-controls" hidden><button type="button" id="logout">Sign out</button><form id="save-model"><label>Model name <input name="title" required maxlength="120" placeholder="Name this model"></label><button type="submit">Save current model</button></form><ul id="model-list"></ul></div></details>
+<iframe id="api-frame" title="Sketchfab 3D model" allow="autoplay; fullscreen; xr-spatial-tracking" allowfullscreen></iframe>
+<script>
+const input=document.querySelector('#model'),status=document.querySelector('#status');
+const client=new Sketchfab(document.querySelector('#api-frame'));let api=null, center=[0,0,0], distance=1, baseDistance=1, originalFov=45, currentFov=1;
+let activeUid=null, loadVersion=0, projectionBusy=false, projectionVersion=0;
+const fallback='e7d6ce6350fc4039a58cafe6d05d1c09';
+function modelId(value){value=value.trim();if(value.length>2048)return null; if(!value.includes('/')) return /^[a-zA-Z0-9]+$/.test(value)?value:null; try {const u=new URL(value);if(!/^(www\.)?sketchfab\.com$/i.test(u.hostname))return null; const parts=u.pathname.split('/').filter(Boolean);if(parts[0]==='models' && parts[1] && /^[a-zA-Z0-9]+$/.test(parts[1])) return parts[1]; if(parts[0]==='3d-models' && parts[1]){const id=parts[1].split('-').pop();return /^[a-zA-Z0-9]+$/.test(id)?id:null;}return null;}catch{return null}}
+function load(value, shared = null) {
+  const uid=modelId(value);
+  if(!uid){status.textContent='Enter a Sketchfab model link or ID.';return}
+  const version=++loadVersion;
+  input.value=value.trim(); status.textContent='Loading model…'; api=null; activeUid=null; projectionBusy=false; projectionMode='flat';
+  document.querySelector('#projection').value='flat';
+  document.querySelector('.projection').textContent='Near-orthographic · slight perspective remains';
+  client.init(uid, {success(viewer) {
+    if(version!==loadVersion)return;
+    viewer.addEventListener('viewerready',()=>{
+      if(version!==loadVersion)return;
+      viewer.setBackground({color:[1,1,1]});
+      viewer.getCameraLookAt((err,camera)=>{
+        if(version!==loadVersion)return;
+        if(err || !camera){status.textContent='Camera unavailable';return}
+        center=camera.target;
+        const originalDistance=Math.hypot(...camera.position.map((v,i)=>v-center[i]))||1;
+        viewer.getFov((err,fov)=>{
+          if(version!==loadVersion)return;
+          originalFov=(!err && fov>=1 && fov<=179)?fov:45;
+          viewer.setFov(1,(err,actual)=>{
+            if(version!==loadVersion)return;
+            if(err){status.textContent='Could not set a narrow field of view';return}
+            currentFov=actual>=1 && actual<=179?actual:1;
+            distance=baseDistance=originalDistance*Math.tan(originalFov*Math.PI/360)/Math.tan(currentFov*Math.PI/360);
+            const position=camera.position.map((v,i)=>center[i]+(v-center[i])*distance/originalDistance);
+            viewer.setCameraLookAt(position,center,0,(err)=>{
+              if(version!==loadVersion)return;
+              if(err){status.textContent='Could not position the camera';return}
+              api=viewer; activeUid=uid; status.textContent='Ready';
+              try{localStorage.setItem('sketch-reference-model',uid)}catch{}
+              restoreSharedView(viewer,shared);
+            });
+          });
+        });
+      });
+    });
+    viewer.start();
+  },error(){if(version===loadVersion)status.textContent='Could not load this model. Check its link and embedding permissions.'}});
+}
+function withCamera(callback) {
+  const viewer=api, version=loadVersion, projection=projectionVersion;
+  viewer.getCameraLookAt((err,camera)=>{if(version===loadVersion && viewer===api && projection===projectionVersion && !projectionBusy)callback(err,camera)});
+}
+function setView(view) {
+  if(!api || projectionBusy)return;
+  withCamera((err,camera)=>{
+    if(err || !camera){status.textContent='Camera unavailable';return;}
+    center=camera.target;
+    distance=Math.hypot(...camera.position.map((v,i)=>v-center[i]))||distance;
+    const n=1/Math.sqrt(3);
+    const dirs={top:[0,0,1],left:[1,0,0],right:[-1,0,0],front:[0,-1,0],rear:[0,1,0],threequarter:[n,-n,n]};
+    api.setCameraLookAt(dirs[view].map((v,i)=>center[i]+v*distance),center,1);
+  });
+}
+function changeProjection(value, done, sharedFov) {
+  if (!api || projectionBusy) {document.querySelector('#projection').value=projectionMode;return;}
+  const viewer=api, version=loadVersion;
+  const angle = sharedFov || (value === 'flat' ? 1 : value === 'original' ? originalFov : Math.min(150, Math.max(85, originalFov + 20)));
+  projectionBusy=true; projectionVersion++;
+  viewer.getCameraLookAt((err, camera) => {
+    if(version!==loadVersion)return;
+    if (err || !camera) { projectionBusy=false; document.querySelector('#projection').value=projectionMode; status.textContent = 'Camera unavailable'; return; }
+    const oldFov = currentFov;
+    viewer.setFov(angle, (err, actual) => {
+      if(version!==loadVersion)return;
+      if (err) { projectionBusy=false; document.querySelector('#projection').value=projectionMode; status.textContent = 'Could not change projection.'; return; }
+      const newFov = actual>=1 && actual<=179 ? actual : angle;
+      const factor = Math.tan(oldFov * Math.PI / 360) / Math.tan(newFov * Math.PI / 360);
+      const pos = camera.position.map((v, i) => camera.target[i] + (v - camera.target[i]) * factor);
+      currentFov = newFov; baseDistance *= factor; projectionMode=value;
+      document.querySelector('#projection').value=value;
+      document.querySelector('.projection').textContent = value === 'flat' ? 'Near-orthographic · slight perspective remains' : value === 'original' ? 'Original perspective' : 'Wide perspective';
+      viewer.setCameraLookAt(pos, camera.target, 0, () => {
+        if(version!==loadVersion)return;
+        projectionBusy=false; if (done) done();
+      });
+    });
+  });
+}
+let projectionMode='flat';
+document.querySelector('#projection').addEventListener('change', e => changeProjection(e.target.value));
+const pendingShared = new URLSearchParams(location.search);
+function restoreSharedView(viewer, shared) {
+  if (!shared) return;
+  const mode = shared.get('projection');
+  const vector = key => (shared.get(key) || '').split(',').map(v=>v.trim()===''?NaN:Number(v));
+  const p = vector('position'), t = vector('target');
+  const valid = p.length === 3 && t.length === 3 && [...p,...t].every(v => Number.isFinite(v) && Math.abs(v) < 1e9) && Math.hypot(...p.map((v,i) => v-t[i])) > 1e-9;
+  const fov=shared.has('fov')?Number(shared.get('fov')):undefined;
+  if (!['flat','original','wide'].includes(mode) || !valid || (fov!==undefined && !(fov>=1 && fov<=179))) return;
+  changeProjection(mode, () => viewer.setCameraLookAt(p, t, 0), fov);
+}
+document.querySelector('#share').addEventListener('click', () => {
+  if (!api || projectionBusy) return;
+  withCamera(async (err, camera) => {
+    if (err || !camera) { status.textContent='Could not copy the view.'; return; }
+    const url = new URL(location.pathname, location.origin);
+    url.searchParams.set('model', activeUid);
+    url.searchParams.set('fov', String(currentFov));
+    url.searchParams.set('projection', projectionMode);
+    url.searchParams.set('position', camera.position.map(n => Number(n.toPrecision(9))).join(','));
+    url.searchParams.set('target', camera.target.map(n => Number(n.toPrecision(9))).join(','));
+    try { await navigator.clipboard.writeText(url.href); status.textContent='View link copied.'; } catch { status.textContent='Could not access clipboard.'; }
+  });
+});
+// Orbit the camera around its current target without changing its distance.
+function rotateAxis(direction) {
+  if (!api || projectionBusy) return;
+  withCamera((err, camera) => {
+    if (err || !camera) { status.textContent = 'Camera unavailable'; return; }
+    const target = camera.target;
+    const [x, y, z] = camera.position.map((v, i) => v - target[i]);
+    const radius = Math.hypot(x, y, z);
+    if (!radius) return;
+    let azimuth = Math.atan2(y, x);
+    let elevation = Math.asin(Math.max(-1, Math.min(1, z / radius)));
+    const step = Number(document.querySelector('#step').value) * Math.PI / 180;
+    if (direction === 'left') azimuth += step;
+    if (direction === 'right') azimuth -= step;
+    if (direction === 'up') elevation = Math.min(Math.PI / 2 - 0.0001, elevation + step);
+    if (direction === 'down') elevation = Math.max(-Math.PI / 2 + 0.0001, elevation - step);
+    const horizontal = radius * Math.cos(elevation);
+    const position = [horizontal * Math.cos(azimuth), horizontal * Math.sin(azimuth), radius * Math.sin(elevation)].map((v, i) => v + target[i]);
+    api.setCameraLookAt(position, target, 0.2, error => { if (error) status.textContent = 'Could not rotate the view'; });
+  });
+}
+document.querySelectorAll('[data-orbit]').forEach(button => button.addEventListener('click', () => rotateAxis(button.dataset.orbit)));
+document.querySelector('#form').addEventListener('submit',e=>{e.preventDefault();load(input.value)});document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));
+function zoom(factor,reset=false){if(!api || projectionBusy)return;withCamera((err,camera)=>{if(err)return;center=camera.target;const d=Math.hypot(...camera.position.map((v,i)=>v-center[i]))||distance;distance=reset?baseDistance:d*factor;api.setCameraLookAt(camera.position.map((v,i)=>center[i]+(v-center[i])*distance/d),center,0.3);});}
+document.querySelector('#zoom-in').addEventListener('click',()=>zoom(0.8));document.querySelector('#zoom-out').addEventListener('click',()=>zoom(1.25));document.querySelector('#fit').addEventListener('click',()=>zoom(1,true));
+document.querySelector('#save').addEventListener('click',()=>{if(!api){status.textContent='Wait for the model to load.';return}api.getScreenShot('image/png',(err,image)=>{if(err||!image){status.textContent='Could not save the image.';return}const a=document.createElement('a');a.href=image;a.download='sketchfab-reference.png';document.body.appendChild(a);a.click();a.remove();status.textContent='Image saved.'})});
+let initial=modelId(pendingShared.get('model') || '') || fallback;try{if(!pendingShared.has('model'))initial=localStorage.getItem('sketch-reference-model')||fallback}catch{}input.value=initial;load(initial, modelId(pendingShared.get('model') || '') ? pendingShared : null);
+
+const accountStatus = document.querySelector('#account-status');
+const accountForm = document.querySelector('#account-form');
+const libraryControls = document.querySelector('#library-controls');
+async function request(path, method='GET', body) {
+  const response = await fetch('/api/' + path, {method, credentials:'same-origin', cache:'no-store', headers: body ? {'Content-Type':'application/json'} : {}, body: body ? JSON.stringify(body) : undefined});
+  if (!response.ok) { const message = (await response.text()).slice(0,200); throw new Error(message || 'Request failed'); }
+  return response.json();
+}
+async function refreshAccount() {
+  try {
+    const user = await request('me'); accountStatus.textContent = 'Signed in as ' + user.username;
+    accountForm.hidden = true; libraryControls.hidden = false; await refreshModels();
+  } catch { accountStatus.textContent = 'Sign in to save models across devices. Accounts require the self-hosted Form Lab server.'; accountForm.hidden = false; libraryControls.hidden = true; document.querySelector('#model-list').replaceChildren(); }
+}
+async function refreshModels() {
+  const models = await request('models'); const list = document.querySelector('#model-list'); list.replaceChildren();
+  for (const model of models) {
+    const li=document.createElement('li'), open=document.createElement('button'), remove=document.createElement('button');
+    open.textContent=model.title; open.type='button'; open.addEventListener('click',()=>load(model.uid));
+    remove.textContent='Remove'; remove.type='button'; remove.setAttribute('aria-label','Remove '+model.title);
+    remove.addEventListener('click',async()=>{try{await request('models/'+encodeURIComponent(model.uid),'DELETE');await refreshModels()}catch(e){accountStatus.textContent=e.message}});
+    li.append(open,remove); list.append(li);
+  }
+}
+async function authenticate(register) {
+  const data=new FormData(accountForm); const body=Object.fromEntries(data.entries());
+  try { await request(register ? 'register' : 'login', 'POST', body); accountForm.reset(); await refreshAccount(); }
+  catch(e) { accountStatus.textContent=e.message || 'Could not sign in.'; }
+}
+accountForm.addEventListener('submit',e=>{e.preventDefault();authenticate(false)});
+document.querySelector('#register').addEventListener('click',()=>{if(accountForm.reportValidity()) authenticate(true)});
+document.querySelector('#logout').addEventListener('click',async()=>{try{await request('logout','POST',{});await refreshAccount()}catch(e){accountStatus.textContent=e.message}});
+document.querySelector('#save-model').addEventListener('submit',async e=>{e.preventDefault();const uid=activeUid,title=new FormData(e.target).get('title');if(!uid){accountStatus.textContent='Load a valid model first.';return}try{await request('models','POST',{uid,title});e.target.reset();await refreshModels()}catch(err){accountStatus.textContent=err.message}});
+refreshAccount();
+</script></body></html>

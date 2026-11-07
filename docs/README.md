@@ -1,10 +1,12 @@
 # Documentation index
 
-Status: local form studies implemented, including shareable URL snapshots, editable S-curves, local thickness, live previews, deformations, rounded references and cross-contours; Rust persistence and the broader application remain planned.
+Status: local form studies implemented, including shareable URL snapshots, editable S-curves, local thickness, live previews, deformations, rounded references and cross-contours; a Sketchfab viewer and initial Rust account and model-reference storage are available locally; the broader application remains planned.
 
 Types: `prd` = product requirements; `spec` = technical design; `plan` = implementation sequence; `impl` = implemented behavior and verification.
 
 ## Fast Paths
+
+- Run the Sketchfab viewer and synced library: [Sketchfab viewer](impl_sketchfab-viewer.md)
 
 - Deploy to your Cloudflare account: [Cloudflare deployment](impl_cloudflare-deployment.md)
 
@@ -22,6 +24,8 @@ Types: `prd` = product requirements; `spec` = technical design; `plan` = impleme
 - `prd` [Form Lab requirements](prd_form-lab.md): User goals, reference analysis, exercise design, scope, and measurable usability requirements.
 
 ## Engineering
+
+- `impl` [Sketchfab viewer](impl_sketchfab-viewer.md): Perspective controls, share links, account-backed model references, Kamal/Compose hosting, backup recovery and verification.
 
 - `impl` [Cloudflare deployment](impl_cloudflare-deployment.md): Validated static-assets configuration for form-lab.app, terminal deployment, custom domain setup, verification and status.
 

@@ -1,0 +1,14 @@
+services:
+  form-lab:
+    build: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      FORM_LAB_ORIGIN: ${FORM_LAB_ORIGIN:?Set FORM_LAB_ORIGIN to your public HTTPS origin}
+      FORM_LAB_SIGNUP_KEY: ${FORM_LAB_SIGNUP_KEY:-}
+    volumes:
+      - form-lab-data:/data
+volumes:
+  form-lab-data:

@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+node_modules
+**/node_modules
+frontend/dist
+server/target
+*.sqlite3*
+artifacts
+.kamal
+backups

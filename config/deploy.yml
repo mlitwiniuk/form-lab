@@ -1,0 +1,41 @@
+# Single-host SQLite deployment. Set these non-secret values in your terminal
+# (homelab: `set -a; . ~/dev/network/secrets/form-lab.env; . ~/dev/network/secrets/registry.env; set +a`).
+service: form-lab
+image: <%= ENV.fetch("FORM_LAB_IMAGE") %>
+minimum_version: 2.12.0
+servers:
+  web:
+    - <%= ENV.fetch("FORM_LAB_SERVER") %>
+proxy:
+  host: <%= ENV.fetch("FORM_LAB_HOST") %>
+  app_port: 3000
+  # TLS terminates upstream (Cloudflare proxy -> Caddy); kamal-proxy serves plain HTTP on :80
+  # and passes the X-Forwarded-* headers it receives through to the app.
+  ssl: false
+  forward_headers: true
+  healthcheck:
+    path: /up
+  buffering:
+    max_request_body: 16384
+registry:
+  server: <%= ENV.fetch("KAMAL_REGISTRY_SERVER", "ghcr.io") %>
+  username: <%= ENV.fetch("KAMAL_REGISTRY_USERNAME") %>
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+builder:
+  arch: <%= ENV.fetch("FORM_LAB_ARCH", "amd64") %>
+<% if ENV["FORM_LAB_BUILDER"] %>
+  # Build on a remote Docker host of the target arch (e.g. ssh://builder@host) instead of emulating locally.
+  remote: <%= ENV["FORM_LAB_BUILDER"] %>
+<% end %>
+ssh:
+  user: <%= ENV.fetch("FORM_LAB_SSH_USER") %>
+env:
+  clear:
+    FORM_LAB_ORIGIN: https://<%= ENV.fetch("FORM_LAB_HOST") %>
+  secret:
+    - FORM_LAB_SIGNUP_KEY
+volumes:
+  - form-lab-data:/data
+# Vite's hashed assets remain available across rolling application releases.
+asset_path: /app/frontend/dist/assets
