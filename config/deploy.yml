@@ -1,5 +1,10 @@
-# Single-host SQLite deployment. Set these non-secret values in your terminal
-# (homelab: `set -a; . ~/dev/network/secrets/form-lab.env; . ~/dev/network/secrets/registry.env; set +a`).
+# Single-host SQLite deployment. Site-specific, non-secret values come from the environment:
+#   required: FORM_LAB_SERVER (host IP), FORM_LAB_HOST (public hostname), FORM_LAB_SSH_USER, FORM_LAB_IMAGE,
+#             KAMAL_REGISTRY_USERNAME
+#   optional: KAMAL_REGISTRY_SERVER (default ghcr.io), FORM_LAB_ARCH (default amd64),
+#             FORM_LAB_BUILDER (remote Docker host for builds, e.g. ssh://user@host),
+#             FORM_LAB_PROXY_SSL ("false" when a TLS-terminating reverse proxy sits in front; default true)
+# Secrets (KAMAL_REGISTRY_PASSWORD, FORM_LAB_SIGNUP_KEY) are referenced from .kamal/secrets.
 service: form-lab
 image: <%= ENV.fetch("FORM_LAB_IMAGE") %>
 minimum_version: 2.12.0
@@ -9,14 +14,17 @@ servers:
 proxy:
   host: <%= ENV.fetch("FORM_LAB_HOST") %>
   app_port: 3000
-  # TLS terminates upstream (Cloudflare proxy -> Caddy); kamal-proxy serves plain HTTP on :80
-  # and passes the X-Forwarded-* headers it receives through to the app.
+<% if ENV.fetch("FORM_LAB_PROXY_SSL", "true") == "false" %>
+  # Behind a reverse proxy that terminates TLS: serve plain HTTP on :80 and pass its X-Forwarded-* headers through.
   ssl: false
   forward_headers: true
+<% else %>
+  ssl: true
+<% end %>
   healthcheck:
     path: /up
   buffering:
-    max_request_body: 16384
+    max_request_body: 65536
 registry:
   server: <%= ENV.fetch("KAMAL_REGISTRY_SERVER", "ghcr.io") %>
   username: <%= ENV.fetch("KAMAL_REGISTRY_USERNAME") %>
@@ -25,7 +33,7 @@ registry:
 builder:
   arch: <%= ENV.fetch("FORM_LAB_ARCH", "amd64") %>
 <% if ENV["FORM_LAB_BUILDER"] %>
-  # Build on a remote Docker host of the target arch (e.g. ssh://builder@host) instead of emulating locally.
+  # Build on a remote Docker host of the target arch instead of emulating it locally.
   remote: <%= ENV["FORM_LAB_BUILDER"] %>
 <% end %>
 ssh:

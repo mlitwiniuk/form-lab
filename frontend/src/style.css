@@ -251,3 +251,34 @@ fieldset { padding: 0; border: 0; margin: 0; min-width: 0; }
 .view-angle-controls summary span { float: right; font-size: 11px; font-weight: 400; color: var(--muted); }
 .view-angle-controls .level-view { width: 100%; margin-top: 12px; }
 .view-angle-controls .mode-tabs button { min-height: 44px; }
+
+/* Both reference tools share navigation, accounts and the saved-reference library. */
+.workspace-header { gap: 18px; flex-wrap: wrap; }
+.workspace-header .brand { font-size: 23px; }
+.workspace-header .header-actions { flex-wrap: wrap; }
+.workspace-switch { display: flex; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 10px; }
+.workspace-switch a { padding: 9px 12px; border-radius: 6px; font-size: 12px; white-space: nowrap; }
+.workspace-switch a[aria-current=page] { background: var(--active); color: var(--green); font-weight: 650; }
+.account-trigger { max-width: 180px; }.account-trigger span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-dialog { color: var(--ink); background: var(--panel); width: min(560px, calc(100% - 28px)); max-height: min(88dvh, 900px); padding: 26px; border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 24px 100px #1c30262b; overflow-y: auto; overscroll-behavior: contain; }
+.account-dialog::backdrop { background: #152e2766; backdrop-filter: blur(3px); }
+.dialog-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }.dialog-heading h2 { margin: 0; font-size: 26px; letter-spacing: -.7px; }
+.dialog-heading .icon-button { flex-shrink: 0; }
+.dialog-intro { color: var(--muted); font-size: 14px; line-height: 1.65; margin-bottom: 22px; }
+.account-tabs { margin-bottom: 22px; }.account-tabs button[aria-pressed=true] { background: var(--active); color: var(--green); font-weight: 650; }
+.account-form label { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; font-size: 13px; font-weight: 600; }
+.account-form input:not([type=radio]), .manual-view-link input { width: 100%; min-height: 46px; padding: 11px 12px; color: var(--ink); background: #fff; border: 1px solid #b9c9ba; border-radius: 8px; font-size: 16px; }
+.account-form input::placeholder { color: #8a968f; font-size: 13px; font-weight: 400; }
+.full-width { width: 100%; }
+.account-error { padding: 12px 14px; background: #f9eee7; border: 1px solid #e9c9b8; color: #824c32; border-radius: 9px; font-size: 13px; line-height: 1.6; }
+.account-error .text-button { display: block; }.account-footer { margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--line); }
+.save-options { padding: 14px; margin-bottom: 20px; border: 1px solid var(--line); border-radius: 9px; }.save-options label { flex-direction: row; align-items: center; font-weight: 400; line-height: 1.5; }.save-options label:last-child { margin: 0; }.save-options input { accent-color: var(--green); flex-shrink: 0; }
+.library-empty { padding: 32px 12px; text-align: center; color: var(--muted); }.library-empty svg { margin-bottom: 16px; }.library-empty h3 { color: var(--ink); font-size: 18px; }.library-empty p { font-size: 14px; line-height: 1.7; }
+.saved-list { padding: 0; margin: 0; list-style: none; }.saved-list li { border-top: 1px solid var(--line); padding: 8px 0; }.saved-open { width: 100%; text-align: left; background: transparent; border: 0; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 7px; }.saved-open:hover { background: var(--active); }.saved-open strong { font-size: 16px; overflow-wrap: anywhere; }.saved-open>span:last-child { font-size: 12px; color: var(--muted); }.save-kind { font-size: 10px; letter-spacing: 1px; color: var(--green); }.saved-delete { display: flex; gap: 12px; justify-content: flex-end; align-items: center; font-size: 12px; }.saved-delete .text-button { margin: 0; min-height: 36px; }.danger { color: #a34d32; }
+.sketchfab-frame { flex: 1; min-height: 0; display: block; width: 100%; border: 0; background: #fff; }
+.sketchfab-attribution { color: var(--muted); font-size: 11px; }.sketchfab-status { padding: 10px 18px; min-height: 38px; border-top: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: 12px; flex-shrink: 0; }
+.sketchfab-controls { border-top: 1px solid var(--line); padding-top: 22px; margin-top: 24px; }.orbit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }.rotation-step { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; font-size: 13px; color: var(--muted); }.rotation-step select { min-height: 44px; padding: 8px 12px; color: var(--ink); border: 1px solid var(--line); border-radius: 8px; background: white; }
+.manual-view-link { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: min(600px, calc(100% - 24px)); padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: 0 6px 30px #273d3733; display: flex; gap: 12px; align-items: end; z-index: 15; }.manual-view-link label { flex: 1; min-width: 0; font-size: 12px; }.manual-view-link input { margin-top: 8px; }
+@media (max-width: 1200px) { .workspace-header { gap: 8px; }.workspace-header .brand-symbol { display: none; }.workspace-header .header-actions .secondary-button { padding: 10px; }.workspace-header .share-button span, .workspace-header .export-button span { display: none; } }
+@media (max-width: 900px) { .workspace-header { padding: 8px 12px; }.workspace-header .workspace-switch { margin-left: auto; }.workspace-header .header-actions { flex: 1 0 100%; margin: 0; justify-content: flex-end; }.workspace-header .header-actions .secondary-button { flex: 1; }.workspace-header .drawing-button { flex: 1; }.workspace-header .header-actions .share-button, .workspace-header .header-actions .export-button { flex: 0 0 44px; }.account-trigger { max-width: 170px; } }
+@media (max-width: 480px) { .workspace-header .brand { font-size: 20px; }.workspace-switch a { padding: 8px; }.workspace-header .header-actions { gap: 4px; }.workspace-header .header-actions .secondary-button { gap: 5px; padding: 8px; font-size: 11px; }.workspace-header .drawing-button span { display: none; }.workspace-header .drawing-button { flex: 0 0 44px; }.workspace-header .account-trigger { max-width: 100px; }.account-dialog { padding: 20px; }.dialog-heading h2 { font-size: 23px; }.account-tabs button { font-size: 11px; padding: 8px; } }

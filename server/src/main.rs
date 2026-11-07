@@ -102,9 +102,21 @@ fn session_user(app: &App, headers: &HeaderMap) -> ApiResult<i64> {
     )
     .map_err(|_| UNAUTHORIZED)
 }
-fn make_session(app: &App, user_id: i64) -> ApiResult<Response> {
+fn guarded_session(app: &App, user_id: i64, password_hash: Option<&str>) -> ApiResult<Response> {
     let raw = token();
     let db = app.db.lock().map_err(db_error)?;
+    if let Some(hash) = password_hash {
+        let current: String = db
+            .query_row(
+                "SELECT password_hash FROM users WHERE id=?",
+                [user_id],
+                |r| r.get(0),
+            )
+            .map_err(|_| UNAUTHORIZED)?;
+        if current != hash {
+            return Err(UNAUTHORIZED);
+        }
+    }
     db.execute("DELETE FROM sessions WHERE expires_at <= ?", [now()])
         .map_err(db_error)?;
     db.execute(
@@ -213,7 +225,7 @@ async fn register(
         .map_err(|_| (StatusCode::CONFLICT, "Could not create this account."))?;
         db.last_insert_rowid()
     };
-    make_session(&app, id)
+    guarded_session(&app, id, Some(&hash))
 }
 async fn login(
     State(app): State<App>,
@@ -242,6 +254,7 @@ async fn login(
             "Authentication busy. Try again later.",
         )
     })?;
+    let expected_hash = hash.clone();
     let valid = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         PasswordHash::new(&hash).ok().is_some_and(|h| {
@@ -255,7 +268,7 @@ async fn login(
     if !valid || id == 0 {
         return Err(UNAUTHORIZED);
     }
-    make_session(&app, id)
+    guarded_session(&app, id, Some(&expected_hash))
 }
 async fn logout(State(app): State<App>, headers: HeaderMap) -> ApiResult<Response> {
     same_origin(&app, &headers)?;
@@ -368,6 +381,289 @@ async fn delete_model(
         .map_err(db_error)?;
     Ok(Json(serde_json::json!({"ok":true})))
 }
+#[derive(Deserialize, Serialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum ConfigurationKind {
+    Study,
+    Sketchfab,
+}
+#[derive(Serialize)]
+struct Configuration {
+    id: String,
+    title: String,
+    kind: ConfigurationKind,
+    settings: serde_json::Value,
+    revision: i64,
+    updated_at: i64,
+}
+#[derive(Deserialize)]
+struct SaveConfiguration {
+    title: String,
+    kind: ConfigurationKind,
+    settings: serde_json::Value,
+    expected_revision: Option<i64>,
+}
+fn configuration(row: &rusqlite::Row<'_>) -> rusqlite::Result<Configuration> {
+    let kind: String = row.get(2)?;
+    let settings: String = row.get(3)?;
+    Ok(Configuration {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        kind: if kind == "study" {
+            ConfigurationKind::Study
+        } else {
+            ConfigurationKind::Sketchfab
+        },
+        settings: serde_json::from_str(&settings).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e))
+        })?,
+        revision: row.get(4)?,
+        updated_at: row.get(5)?,
+    })
+}
+fn validate_configuration(c: &SaveConfiguration) -> ApiResult<String> {
+    if c.title.trim().is_empty() || c.title.trim().chars().count() > 120 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Use a name between 1 and 120 characters.",
+        ));
+    }
+    let valid = match c.kind {
+        ConfigurationKind::Study => {
+            c.settings
+                .get("version")
+                .and_then(|v| v.as_u64())
+                .is_some_and(|v| (1..=5).contains(&v))
+                && c.settings.get("scene").is_some_and(|v| v.is_object())
+                && c.settings.get("camera").is_some_and(|v| v.is_object())
+        }
+        ConfigurationKind::Sketchfab => {
+            c.settings.get("version").and_then(|v| v.as_u64()) == Some(1)
+                && c.settings
+                    .get("uid")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|v| {
+                        (1..=64).contains(&v.len()) && v.bytes().all(|b| b.is_ascii_alphanumeric())
+                    })
+        }
+    };
+    let settings = serde_json::to_string(&c.settings).map_err(db_error)?;
+    if !valid || settings.len() > 48 * 1024 {
+        return Err((StatusCode::BAD_REQUEST, "Invalid saved settings."));
+    }
+    Ok(settings)
+}
+async fn list_configurations(
+    State(app): State<App>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Vec<serde_json::Value>>> {
+    let user = session_user(&app, &headers)?;
+    let db = app.db.lock().map_err(db_error)?;
+    let mut stmt = db.prepare("SELECT id,title,kind,revision,updated_at FROM configurations WHERE user_id=? ORDER BY updated_at DESC,id").map_err(db_error)?;
+    let rows = stmt.query_map([user], |r| Ok(serde_json::json!({"id":r.get::<_,String>(0)?,"title":r.get::<_,String>(1)?,"kind":r.get::<_,String>(2)?,"revision":r.get::<_,i64>(3)?,"updated_at":r.get::<_,i64>(4)?}))).map_err(db_error)?.collect::<Result<Vec<_>, _>>().map_err(db_error)?;
+    Ok(Json(rows))
+}
+async fn get_configuration(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Configuration>> {
+    let user = session_user(&app, &headers)?;
+    app.db.lock().map_err(db_error)?.query_row("SELECT id,title,kind,settings,revision,updated_at FROM configurations WHERE user_id=? AND id=?", params![user,id], configuration).map(Json).map_err(|e| match e { rusqlite::Error::QueryReturnedNoRows => (StatusCode::NOT_FOUND,"Save not found."), _ => db_error(e) })
+}
+async fn create_configuration(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Json(c): Json<SaveConfiguration>,
+) -> ApiResult<Json<Configuration>> {
+    same_origin(&app, &headers)?;
+    let user = session_user(&app, &headers)?;
+    let settings = validate_configuration(&c)?;
+    let id = token();
+    let db = app.db.lock().map_err(db_error)?;
+    let count: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM configurations WHERE user_id=?",
+            [user],
+            |r| r.get(0),
+        )
+        .map_err(db_error)?;
+    if count >= 1000 {
+        return Err((StatusCode::CONFLICT, "Library limit reached (1000 saves)."));
+    }
+    let kind = match c.kind {
+        ConfigurationKind::Study => "study",
+        ConfigurationKind::Sketchfab => "sketchfab",
+    };
+    db.execute("INSERT INTO configurations(id,user_id,title,kind,settings,revision,updated_at) VALUES(?,?,?,?,?,1,?)", params![id,user,c.title.trim(),kind,settings,now()]).map_err(db_error)?;
+    db.query_row("SELECT id,title,kind,settings,revision,updated_at FROM configurations WHERE user_id=? AND id=?", params![user,id], configuration).map(Json).map_err(db_error)
+}
+async fn update_configuration(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(c): Json<SaveConfiguration>,
+) -> ApiResult<Json<Configuration>> {
+    same_origin(&app, &headers)?;
+    let user = session_user(&app, &headers)?;
+    let settings = validate_configuration(&c)?;
+    let expected = c
+        .expected_revision
+        .filter(|v| *v > 0)
+        .ok_or((StatusCode::BAD_REQUEST, "A save revision is required."))?;
+    let kind = match c.kind {
+        ConfigurationKind::Study => "study",
+        ConfigurationKind::Sketchfab => "sketchfab",
+    };
+    let db = app.db.lock().map_err(db_error)?;
+    let changed = db.execute("UPDATE configurations SET title=?,settings=?,revision=revision+1,updated_at=? WHERE user_id=? AND id=? AND kind=? AND revision=?", params![c.title.trim(),settings,now(),user,id,kind,expected]).map_err(db_error)?;
+    if changed == 0 {
+        let exists = db
+            .query_row(
+                "SELECT 1 FROM configurations WHERE user_id=? AND id=?",
+                params![user, id],
+                |_| Ok(()),
+            )
+            .is_ok();
+        return Err(if exists {
+            (
+                StatusCode::CONFLICT,
+                "This save changed in another tab or device. Open its latest version, or save your work as new.",
+            )
+        } else {
+            (StatusCode::NOT_FOUND, "Save not found.")
+        });
+    }
+    db.query_row("SELECT id,title,kind,settings,revision,updated_at FROM configurations WHERE user_id=? AND id=?", params![user,id], configuration).map(Json).map_err(db_error)
+}
+async fn delete_configuration(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    same_origin(&app, &headers)?;
+    let user = session_user(&app, &headers)?;
+    let changed = app
+        .db
+        .lock()
+        .map_err(db_error)?
+        .execute(
+            "DELETE FROM configurations WHERE user_id=? AND id=?",
+            params![user, id],
+        )
+        .map_err(db_error)?;
+    if changed == 0 {
+        return Err((StatusCode::NOT_FOUND, "Save not found."));
+    }
+    Ok(Json(serde_json::json!({"ok":true})))
+}
+fn migrate_configurations(db: &mut Connection) -> rusqlite::Result<()> {
+    let tx = db.transaction()?;
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS configurations(id TEXT PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,title TEXT NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('study','sketchfab')),settings TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,updated_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS configurations_user ON configurations(user_id,updated_at); CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY);")?;
+    if tx
+        .query_row(
+            "SELECT 1 FROM schema_migrations WHERE version=1",
+            [],
+            |_| Ok(()),
+        )
+        .is_err()
+    {
+        // Preserve earlier named model references as saves with the default camera.
+        let legacy = {
+            let mut stmt = tx.prepare("SELECT user_id,uid,title,created_at FROM models")?;
+            stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+        };
+        for (user, uid, title, created) in legacy {
+            tx.execute("INSERT INTO configurations(id,user_id,title,kind,settings,revision,updated_at) VALUES(?,?,?,'sketchfab',?,1,?)", params![token(),user,title,serde_json::json!({"version":1,"uid":uid}).to_string(),created])?;
+        }
+        tx.execute("INSERT INTO schema_migrations(version) VALUES(1)", [])?;
+    }
+    tx.commit()
+}
+async fn account_options(State(app): State<App>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({"signup_enabled":app.signup.is_some()}))
+}
+#[derive(Deserialize)]
+struct PasswordChange {
+    current_password: String,
+    new_password: String,
+}
+async fn change_password(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Json(c): Json<PasswordChange>,
+) -> ApiResult<Response> {
+    same_origin(&app, &headers)?;
+    let user = session_user(&app, &headers)?;
+    let (name, old): (String, String) = app
+        .db
+        .lock()
+        .map_err(db_error)?
+        .query_row(
+            "SELECT username,password_hash FROM users WHERE id=?",
+            [user],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(db_error)?;
+    throttle(&app, &name)?;
+    if c.current_password.len() > 1024
+        || c.new_password.chars().count() < 12
+        || c.new_password.len() > 1024
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Use a new password of at least 12 characters (maximum 1024 bytes).",
+        ));
+    }
+    let permit = app.auth_slots.clone().try_acquire_owned().map_err(|_| {
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            "Authentication busy. Try again later.",
+        )
+    })?;
+    let old_for_verification = old.clone();
+    let hash = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let parsed = PasswordHash::new(&old_for_verification).map_err(|_| UNAUTHORIZED)?;
+        Argon2::default()
+            .verify_password(c.current_password.as_bytes(), &parsed)
+            .map_err(|_| (StatusCode::UNAUTHORIZED, "Current password is incorrect."))?;
+        Argon2::default()
+            .hash_password(c.new_password.as_bytes(), &SaltString::generate(&mut OsRng))
+            .map(|h| h.to_string())
+            .map_err(db_error)
+    })
+    .await
+    .map_err(db_error)??;
+    {
+        let mut db = app.db.lock().map_err(db_error)?;
+        let tx = db.transaction().map_err(db_error)?;
+        let changed = tx
+            .execute(
+                "UPDATE users SET password_hash=? WHERE id=? AND password_hash=?",
+                params![hash, user, old],
+            )
+            .map_err(db_error)?;
+        if changed != 1 {
+            return Err((
+                StatusCode::CONFLICT,
+                "Password changed in another session. Sign in again.",
+            ));
+        }
+        tx.execute("DELETE FROM sessions WHERE user_id=?", [user])
+            .map_err(db_error)?;
+        tx.commit().map_err(db_error)?;
+    }
+    guarded_session(&app, user, Some(&hash))
+}
 // Never allow shared proxy caches to retain account or library responses.
 async fn private_response(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
@@ -471,9 +767,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(error) => return Err(error.into()),
     }
-    let db = Connection::open(path)?;
+    let mut db = Connection::open(path)?;
     db.busy_timeout(Duration::from_secs(5))?;
     db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,username TEXT NOT NULL UNIQUE,password_hash TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,expires_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS models(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,uid TEXT NOT NULL,title TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(user_id,uid)); CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);")?;
+    migrate_configurations(&mut db)?;
     let app = App {
         db: Arc::new(Mutex::new(db)),
         origin,
@@ -498,10 +795,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/login", post(login))
         .route("/logout", post(logout))
         .route("/me", get(me))
+        .route("/account-options", get(account_options))
+        .route("/password", post(change_password))
+        .route(
+            "/configurations",
+            get(list_configurations).post(create_configuration),
+        )
+        .route(
+            "/configurations/{id}",
+            get(get_configuration)
+                .put(update_configuration)
+                .delete(delete_configuration),
+        )
         .route("/models", get(list_models).post(save_model))
         .route("/models/{uid}", delete(delete_model))
         .fallback(|| async { StatusCode::NOT_FOUND })
-        .layer(DefaultBodyLimit::max(16 * 1024))
+        .layer(DefaultBodyLimit::max(64 * 1024))
         .layer(middleware::from_fn(private_response));
     let router = Router::new()
         .nest("/api", api)
@@ -533,6 +842,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_verified_old_password_cannot_issue_a_session_after_password_rotation() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE users(id INTEGER PRIMARY KEY,password_hash TEXT); CREATE TABLE sessions(token_hash TEXT PRIMARY KEY,user_id INTEGER,expires_at INTEGER); INSERT INTO users VALUES(1,'rotated-hash');").unwrap();
+        let app = App {
+            db: Arc::new(Mutex::new(db)),
+            origin: "http://127.0.0.1:3000".into(),
+            signup: None,
+            secure: false,
+            attempts: Arc::new(Mutex::new(HashMap::new())),
+            auth_slots: Arc::new(Semaphore::new(2)),
+            dummy_hash: String::new(),
+        };
+        assert_eq!(
+            guarded_session(&app, 1, Some("old-verified-hash"))
+                .unwrap_err()
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            app.db
+                .lock()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert!(guarded_session(&app, 1, Some("rotated-hash")).is_ok());
+    }
+    #[test]
+    fn existing_model_references_migrate_once_without_loss_or_resurrection() {
+        let mut db = Connection::open_in_memory().unwrap();
+        db.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE users(id INTEGER PRIMARY KEY); INSERT INTO users VALUES(1); CREATE TABLE models(user_id INTEGER,uid TEXT,title TEXT,created_at INTEGER); INSERT INTO models VALUES(1,'model123','Original saved name',123);").unwrap();
+        migrate_configurations(&mut db).unwrap();
+        migrate_configurations(&mut db).unwrap();
+        let (count, title, payload): (i64, String, String) = db
+            .query_row(
+                "SELECT COUNT(*),title,settings FROM configurations",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(title, "Original saved name");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&payload).unwrap(),
+            serde_json::json!({"version":1,"uid":"model123"})
+        );
+        db.execute("DELETE FROM configurations", []).unwrap();
+        migrate_configurations(&mut db).unwrap();
+        assert_eq!(
+            db.query_row("SELECT COUNT(*) FROM configurations", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.query_row("SELECT COUNT(*) FROM models", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
     #[test]
     fn origins_are_exact_and_public_origins_require_tls() {
         for origin in [

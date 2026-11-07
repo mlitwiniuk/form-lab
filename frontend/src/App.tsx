@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDownToLine, ArrowRight, Box, Check, ChevronDown, ChevronUp, Focus, HelpCircle, Layers3, Plus, Trash2, Link, LockKeyhole, Maximize2, MousePointer2, Move3D, Redo2, Rotate3D, RotateCcw, Shuffle, Undo2, UnlockKeyhole, X } from 'lucide-react';
+import { ArrowDownToLine, ArrowRight, Check, ChevronDown, ChevronUp, Focus, HelpCircle, Layers3, Plus, Trash2, Link, LockKeyhole, Maximize2, MousePointer2, Move3D, Redo2, Rotate3D, RotateCcw, Shuffle, Undo2, UnlockKeyhole, X } from 'lucide-react';
 import { DEFAULT_SCENE, MAX_SHAPES, addShape, removeShape, shapeEntries, getShape, bendLimit, cloneScene, constrainBend, constrainCurvePoint, curveOffsetLimit, CURVE_GAP, generateRounded, makeShape, PRESETS, SHAPES, shapeName, type FormAppearance, type DisplayMode, type Deformation, type ShapeKind, type GeometryResult, type Operation, type Reveals, type SceneState, type ShapeId, type Tool, type Vec3 } from './scene';
 import { formAppearance, referenceAppearance, setFormAppearance } from './appearance';
 import { Viewport } from './viewport';
 import { GeometryPipeline } from './geometry-pipeline';
 import { curveFromShape, type GeometryQuality } from './forms';
 import { decodeStudy, DEFAULT_CAMERA, encodeStudy, type SharedStudy } from './share-state';
+import { WorkspaceHeader } from './AccountWorkspace';
+import { studyFromSave } from './library';
 import { ShareSync } from './share-sync';
 import { viewAngles, type Projection, type OrbitMode, type ViewAngles } from './study-camera';
 
@@ -229,6 +231,7 @@ export default function App() {
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
+      if (document.querySelector('dialog[open]')) return;
       if (manualLink) {
         if (event.key === 'Escape') { setManualLink(null); shareButton.current?.focus(); }
         if (event.key === 'Tab') {
@@ -324,7 +327,7 @@ export default function App() {
     try {
       // Read current parameters directly; refinement workers may still be busy.
       const hash = encodeStudy(readStudy.current());
-      link = `${window.location.origin}${window.location.pathname}${window.location.search}${hash}`;
+      const url = new URL(window.location.href); url.searchParams.delete('save'); url.hash = hash; link = url.href;
       pauseSharing.current = false; setLinkError(''); syncUrl(true);
     } catch { setShareStatus('This study could not be encoded. Check the form settings and try again.'); return; }
     try {
@@ -379,16 +382,16 @@ export default function App() {
       {!single && <button className="text-button remove-form" disabled={locked || dragging} onClick={removeForm}><Trash2 size={14} /> Remove form {selected.toUpperCase()}</button>}</>}
   </section>;
   return <div className={`app ${focus ? 'focus-mode' : ''} ${controlsCollapsed ? 'controls-collapsed' : ''}`}>
-    <header className="app-header">
-      <a className="brand" href="./" aria-label="Form Lab home"><span className="brand-symbol"><Box size={24} strokeWidth={1.5} /></span>Form Lab<span className="brand-dot">.</span></a>
-      <span className="header-context">A space to understand form</span>
-      <div className="header-actions">
-        <a className="secondary-button" href="/sketchfab/">Sketchfab viewer</a>
-        <button ref={shareButton} className="secondary-button share-button" onClick={copyShareLink} aria-label="Copy share link" title="Copy share link"><Link size={17} /><span>Share link</span></button>
-        <button className="secondary-button export-button" onClick={exportImage} disabled={busy || !!error} aria-label="Save image" title="Save image"><ArrowDownToLine size={17} /><span>Save image</span></button>
-        <button className={`primary-button ${locked ? 'locked' : ''}`} onClick={toggleDrawing} aria-pressed={locked}>{locked ? <UnlockKeyhole size={16} /> : <LockKeyhole size={16} />}<span>{locked ? 'Edit forms' : 'Start drawing'}</span></button>
-      </div>
-    </header>
+    <WorkspaceHeader kind="study" disabled={busy || !!error || dragging} capture={() => studyFromSave(readStudy.current())} restore={settings => {
+      const next = studyFromSave(settings);
+      const url = new URL(window.location.href); url.hash = encodeStudy(next);
+      window.history.replaceState(window.history.state, '', url);
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    }}>
+      <button ref={shareButton} className="secondary-button share-button" onClick={copyShareLink} aria-label="Copy share link" title="Copy share link"><Link size={17} /><span>Share link</span></button>
+      <button className="secondary-button export-button" onClick={exportImage} disabled={busy || !!error} aria-label="Save image" title="Save image"><ArrowDownToLine size={17} /><span>Save image</span></button>
+      <button className={`primary-button drawing-button ${locked ? 'locked' : ''}`} onClick={toggleDrawing} aria-pressed={locked}>{locked ? <UnlockKeyhole size={16} /> : <LockKeyhole size={16} />}<span>{locked ? 'Edit forms' : 'Start drawing'}</span></button>
+    </WorkspaceHeader>
     {linkError && <div className="link-notice" role="alert"><p><strong>Couldn’t open this shared study.</strong> {linkError}</p><button className="secondary-button" onClick={() => { pauseSharing.current = false; setLinkError(''); syncUrl(true); }}>Keep this study</button></div>}
     <div className={`share-status ${shareStatus ? 'visible' : ''}`} role="status" aria-live="polite">{shareStatus}</div>
     <main className="workspace">

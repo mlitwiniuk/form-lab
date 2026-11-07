@@ -1,6 +1,10 @@
-generated_at: "2026-11-07T18:46:56+00:00"
+generated_at: "2026-11-07T19:33:27+00:00"
 generated_from: "docs/README.md"
 fast_paths:
+- label: "Save, reopen or overwrite references"
+  links:
+  - title: "Accounts and saved references"
+    path: "docs/impl_saved-references.md"
 - label: "Run the Sketchfab viewer and synced library"
   links:
   - title: "Sketchfab viewer"
@@ -43,6 +47,11 @@ docs:
   type: "prd"
   section: "Product"
   summary: "User goals, reference analysis, exercise design, scope, and measurable usability requirements."
+- path: "docs/impl_saved-references.md"
+  title: "Accounts and saved references"
+  type: "impl"
+  section: "Engineering"
+  summary: "Shared account flow and styling, saved study/model settings, revision-protected overwrites, migrations and local acceptance checks."
 - path: "docs/impl_sketchfab-viewer.md"
   title: "Sketchfab viewer"
   type: "impl"

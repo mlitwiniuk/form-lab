@@ -94,6 +94,36 @@ with tempfile.TemporaryDirectory() as tmp:
         assert call(other_device, '/api/models')[1] == [{'uid':'abcd1234','title':'Study'}]
         assert call(a, '/api/login', 'POST', {'username':'alice','password':'wrong'})[0] == 401
         assert call(a, '/api/login', 'POST', cred('alice'))[0] == 200
+        # The library supports distinct named settings for both tools, not one row per UID.
+        assert call(client(), '/api/configurations')[0] == 401
+        assert call(a, '/api/account-options')[1] == {'signup_enabled':True}
+        shape={'kind':'box','size':[3,3,3],'position':[0,0,0],'rotation':[0,0,0],'deform':{'twist':0,'bend':0,'taper':0,'bulge':0,'roundness':0}}
+        study={'version':5,'display':'wireframe','scene':{'a':shape,'b':shape,'operation':'single','contours':4},'camera':{'position':[10,10,10],'target':[0,0,0],'projection':'orthographic','orthographicSpan':12,'orbitMode':'turn'},'reveals':{'construction':True,'hidden':False,'cutter':False,'seam':False},'locked':True,'focus':False}
+        model={'version':1,'uid':'abcd1234','projection':'wide','fov':85,'position':[12,-24,18],'target':[1,2,3],'step':15,'locked':True}
+        study_body={'title':'Form study','kind':'study','settings':study}
+        model_body={'title':'Front view','kind':'sketchfab','settings':model}
+        assert call(a, '/api/configurations', 'POST', model_body, 'https://evil.example')[0] == 403
+        assert call(a, '/api/configurations', 'POST', {**model_body,'kind':'unknown'})[0] == 422
+        assert call(a, '/api/configurations', 'POST', {**model_body,'title':' '})[0] == 400
+        assert call(a, '/api/configurations', 'POST', {**model_body,'settings':{'version':1,'uid':'../bad'}})[0] == 400
+        form_save=call(a, '/api/configurations', 'POST', study_body)[1]
+        front=call(a, '/api/configurations', 'POST', model_body)[1]
+        side=call(a, '/api/configurations', 'POST', {**model_body,'title':'Side view'})[1]
+        assert front['id'] != side['id']
+        assert call(a, '/api/configurations/'+form_save['id'])[1]['settings'] == study
+        assert call(a, '/api/configurations/'+front['id'])[1]['settings'] == model
+        assert call(b, '/api/configurations')[1] == []
+        for method,body in [('GET',None),('PUT',{**model_body,'expected_revision':1}),('DELETE',None)]:
+            assert call(b, '/api/configurations/'+front['id'], method, body)[0] == 404
+        updated=call(a, '/api/configurations/'+front['id'], 'PUT', {**model_body,'title':'Updated view','expected_revision':1})[1]
+        assert updated['revision'] == 2 and updated['id'] == front['id']
+        assert call(a, '/api/configurations/'+front['id'], 'PUT', {**model_body,'expected_revision':1})[0] == 409
+        assert call(a, '/api/configurations/'+front['id'], 'PUT', model_body)[0] == 400
+        assert call(a, '/api/configurations/'+front['id'], 'PUT', {**study_body,'expected_revision':2})[0] == 409
+        assert call(a, '/api/configurations/'+front['id'])[1]['title'] == 'Updated view'
+        assert call(a, '/api/configurations/'+side['id'], 'DELETE')[0] == 200
+        assert len(call(a, '/api/configurations')[1]) == 2
+        assert all('settings' not in row for row in call(a, '/api/configurations')[1])
         backup=f'{tmp}/backup.sqlite3'
         subprocess.run([str(BINARY), 'backup', backup], env=env, check=True)
         assert os.stat(backup).st_mode & 0o777 == 0o600
@@ -101,6 +131,7 @@ with tempfile.TemporaryDirectory() as tmp:
         with sqlite3.connect(backup) as db:
             assert db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
             assert db.execute('SELECT COUNT(*) FROM models').fetchone()[0] == 1
+            assert db.execute('SELECT COUNT(*) FROM configurations').fetchone()[0] == 2
         proc.terminate(); proc.wait(timeout=5)
         proc=launch()
         assert call(a, '/api/models')[1] == [{'uid':'abcd1234','title':'Study'}]
@@ -110,6 +141,9 @@ with tempfile.TemporaryDirectory() as tmp:
         env['FORM_LAB_SIGNUP_KEY']=''
         proc = launch()
         assert call(client(), '/api/register', 'POST', cred('charlie'))[0] == 403
+        assert call(a, '/api/account-options')[1] == {'signup_enabled':False}
+        assert call(a, '/api/configurations/'+form_save['id'])[1]['settings'] == study
+        assert call(a, '/api/configurations/'+front['id'])[1]['revision'] == 2
         assert call(a, '/api/models')[1] == [{'uid':'abcd1234','title':'Study'}]
         assert call(a, '/api/models/abcd1234', 'DELETE')[0] == 200
         assert call(a, '/api/models')[1] == []
@@ -131,10 +165,26 @@ with tempfile.TemporaryDirectory() as tmp:
         raw=cookie.split(';')[0]
         req=urllib.request.Request(origin+'/api/models', headers={'Cookie':raw})
         with urllib.request.urlopen(req) as response: assert response.status == 200
-        logout_req=urllib.request.Request(origin+'/api/logout', data=b'{}', headers={'Origin':secure_origin,'Content-Type':'application/json','Cookie':raw})
+        # Password rotation revokes every old device session, then issues a fresh session.
+        changed={'current_password':'very-long-password-123','new_password':'updated-long-password-456'}
+        assert call(a, '/api/password', 'POST', changed, 'https://evil.example')[0] == 403
+        raw_headers={'Origin':secure_origin,'Content-Type':'application/json','Cookie':raw}
+        wrong=urllib.request.Request(origin+'/api/password',data=json.dumps({**changed,'current_password':'wrong'}).encode(),headers=raw_headers)
+        try: urllib.request.urlopen(wrong); raise AssertionError('wrong current password accepted')
+        except urllib.error.HTTPError as error: assert error.code == 401
+        change_req=urllib.request.Request(origin+'/api/password',data=json.dumps(changed).encode(),headers=raw_headers)
+        with urllib.request.urlopen(change_req) as response:
+            new_cookie=response.headers['Set-Cookie'].split(';')[0]
+            assert new_cookie != raw
+        try: urllib.request.urlopen(req); raise AssertionError('old session survived password rotation')
+        except urllib.error.HTTPError as error: assert error.code == 401
+        with urllib.request.urlopen(urllib.request.Request(origin+'/api/me', headers={'Cookie':new_cookie})) as response: assert response.status == 200
+        assert call(client(), '/api/login', 'POST', cred('alice'), secure_origin)[0] == 401
+        assert call(client(), '/api/login', 'POST', {**cred('alice'),'password':'updated-long-password-456'}, secure_origin)[0] == 200
+        logout_req=urllib.request.Request(origin+'/api/logout', data=b'{}', headers={'Origin':secure_origin,'Content-Type':'application/json','Cookie':new_cookie})
         with urllib.request.urlopen(logout_req) as response:
             cookie=response.headers['Set-Cookie']
             assert cookie.startswith('__Host-formlab_session=;') and '; Secure' in cookie and 'Max-Age=0' in cookie
-        print('Accounts, cookie flags/revocation/expiry, CSRF, isolation, throttling, backup/restore and restart checks passed.')
+        print('Accounts/password rotation, saved study/model settings, overwrite conflicts, isolation, CSRF, throttling, backup/restore and restart checks passed.')
     finally:
         proc.terminate(); proc.wait(timeout=5)

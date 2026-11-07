@@ -1,10 +1,12 @@
 # Documentation index
 
-Status: local form studies implemented, including shareable URL snapshots, editable S-curves, local thickness, live previews, deformations, rounded references and cross-contours; a Sketchfab viewer and initial Rust account and model-reference storage are available locally; the broader application remains planned.
+Status: local form studies implemented, including shareable URL snapshots, editable S-curves, local thickness, live previews, deformations, rounded references and cross-contours; both tools share account dialogs and a SQLite-backed saved-settings library; the broader application remains planned.
 
 Types: `prd` = product requirements; `spec` = technical design; `plan` = implementation sequence; `impl` = implemented behavior and verification.
 
 ## Fast Paths
+
+- Save, reopen or overwrite references: [Accounts and saved references](impl_saved-references.md)
 
 - Run the Sketchfab viewer and synced library: [Sketchfab viewer](impl_sketchfab-viewer.md)
 
@@ -24,6 +26,8 @@ Types: `prd` = product requirements; `spec` = technical design; `plan` = impleme
 - `prd` [Form Lab requirements](prd_form-lab.md): User goals, reference analysis, exercise design, scope, and measurable usability requirements.
 
 ## Engineering
+
+- `impl` [Accounts and saved references](impl_saved-references.md): Shared account flow and styling, saved study/model settings, revision-protected overwrites, migrations and local acceptance checks.
 
 - `impl` [Sketchfab viewer](impl_sketchfab-viewer.md): Perspective controls, share links, account-backed model references, Kamal/Compose hosting, backup recovery and verification.
 
