@@ -16,7 +16,7 @@ export interface ViewerApi {
   getScreenShot(type: string, callback: Callback<string>): void;
   setUserInteraction?(enabled: boolean): void;
 }
-export interface ViewerClient { init(uid: string, options: { success: (api: ViewerApi) => void; error: () => void }): void }
+export interface ViewerClient { init(uid: string, options: { animation_autoplay: 0; success: (api: ViewerApi) => void; error: () => void }): void }
 declare global { interface Window { Sketchfab?: new (iframe: HTMLIFrameElement) => ViewerClient } }
 export interface ViewerState { ready: boolean; busy: boolean; uid: string; projection: ProjectionMode; step: number; locked: boolean; message: string }
 const radians = (fov: number) => Math.tan(fov * Math.PI / 360);
@@ -106,7 +106,8 @@ export class SketchfabReference {
       const api = await new Promise<ViewerApi>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error('Model loading timed out. Check the link and embedding permissions.')), 45000);
         this.abortLoad = () => { clearTimeout(timer); reject(new Error('The model changed.')); };
-        try { this.client.init(uid, { success: viewer => {
+        // Keep animated models still on initial load and when reopening saved views.
+        try { this.client.init(uid, { animation_autoplay: 0, success: viewer => {
           if (generation !== this.generation) return;
           viewer.addEventListener('viewerready', () => { clearTimeout(timer); resolve(viewer); }); viewer.start();
         }, error: () => { clearTimeout(timer); reject(new Error('Could not load this model. Check its link and embedding permissions.')); } }); } catch (error) { clearTimeout(timer); reject(error); }

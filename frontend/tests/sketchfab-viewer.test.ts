@@ -12,9 +12,20 @@ function setup(autoReady = true) {
   };
   const client: ViewerClient = { init: vi.fn((_uid, options) => { options.success(api); if (autoReady) ready.at(-1)!(); }) };
   const reference = new SketchfabReference(client, vi.fn());
-  return { reference, api, camera, fovRequests, ready, fov: () => fov, distance: () => Math.hypot(...camera.position.map((v, i) => v - camera.target[i])) };
+  return { reference, client, api, camera, fovRequests, ready, fov: () => fov, distance: () => Math.hypot(...camera.position.map((v, i) => v - camera.target[i])) };
 }
 describe('Sketchfab references', () => {
+  it('disables animation autoplay for initial, saved and replacement models', async () => {
+    const s = setup();
+    await s.reference.load(DEFAULT_MODEL);
+    const saved = await s.reference.capture();
+    await s.reference.load(saved.uid, saved);
+    await s.reference.load('AnotherModel');
+    expect(s.client.init).toHaveBeenCalledTimes(3);
+    for (const [, options] of vi.mocked(s.client.init).mock.calls) {
+      expect(options.animation_autoplay).toBe(0);
+    }
+  });
   it('preserves the initial framing using the supported minimum FOV', async () => {
     const s = setup(), before = s.distance(); await s.reference.load(DEFAULT_MODEL);
     expect(s.fovRequests).toEqual([1]);
